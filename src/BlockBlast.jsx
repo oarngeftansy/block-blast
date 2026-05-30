@@ -11,8 +11,15 @@ import React, { useState, useEffect, useRef } from "react";
    ========================================================================= */
 
 const SIZE = 8;
-const CELL = 38, GAP = 3, PAD = 10;
+const CELL = 38, GAP = 3, PAD = 10; // CELL 为桌面端最大格宽, 移动端按视口收缩
 const COLORS = ["#ff5e7e","#ffa63d","#ffd23d","#5ee07a","#3dd6e0","#5e8bff","#b15eff","#ff5ed4"];
+
+// 按视口宽度算出格宽: 保证整块棋盘(含内边距/间隙)能横向放下, 桌面端封顶 CELL, 小屏下探到 26
+const computeCell = () => {
+  if (typeof window === "undefined") return CELL;
+  const avail = window.innerWidth - 40; // 减去 wrap(16×2)+boardZone(4×2) 的外边距
+  return Math.max(26, Math.min(CELL, Math.floor((avail - 2 * PAD - 7 * GAP) / SIZE)));
+};
 
 // ============== 调度配置 (config_flow.yaml 占位实现) ==============
 const DIFF_CYCLE = ["普通","困难","极难","普通","困难","困难","普通","普通","极难","普通"];
@@ -192,6 +199,13 @@ export default function BlockBlast(){
   const undoSnapRef=useRef(null);              // 上一步放置前的完整快照
   const preGameBestRef=useRef(0);              // 本局开始前的历史最高分(用于破纪录判定)
   const [view,setView]=useState("play"); // "play" | "design"  演示视图切换
+  const [cell,setCell]=useState(computeCell); // 响应式格宽, 随视口变化
+  useEffect(()=>{
+    const onResize=()=>setCell(computeCell());
+    window.addEventListener("resize",onResize);
+    window.addEventListener("orientationchange",onResize);
+    return()=>{window.removeEventListener("resize",onResize);window.removeEventListener("orientationchange",onResize);};
+  },[]);
 
   const [sched,setSched]=useState(()=>({
     round:1,loopIndex:0,recordPhase:0,gameNo:1,tier:"中阶",ass:0,
@@ -429,7 +443,7 @@ export default function BlockBlast(){
   },[startKey]); // eslint-disable-line
 
   // ====== 拖拽 ======
-  const computeOrigin=(cx,cy,aR,aC)=>{const b=boardRef.current;if(!b)return null;const rect=b.getBoundingClientRect();const px=cx-rect.left-PAD,py=cy-rect.top-PAD;return{r:Math.floor(py/(CELL+GAP))-aR,c:Math.floor(px/(CELL+GAP))-aC};};
+  const computeOrigin=(cx,cy,aR,aC)=>{const b=boardRef.current;if(!b)return null;const rect=b.getBoundingClientRect();const px=cx-rect.left-PAD,py=cy-rect.top-PAD;return{r:Math.floor(py/(cell+GAP))-aR,c:Math.floor(px/(cell+GAP))-aC};};
   const onPiecePointerDown=(e,idx)=>{
     if(tool)return;const shape=tray[idx];if(!shape)return;
     e.preventDefault();e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -519,7 +533,7 @@ export default function BlockBlast(){
       {combo>1&&!gameOver&&<div style={S.comboBanner}>🔥 连击 ×{combo} · 倍率 ×{(1+combo*SCORE.comboStep).toFixed(1)}</div>}
 
       <div style={S.boardZone}>
-        <div ref={boardRef} className={shake?`board shake${shake==="big"?" big":""}`:"board"} style={{...S.board,cursor:tool?"crosshair":"default",touchAction:"none"}}>
+        <div ref={boardRef} className={shake?`board shake${shake==="big"?" big":""}`:"board"} style={{...S.board,gridTemplateColumns:`repeat(${SIZE},${cell}px)`,gridTemplateRows:`repeat(${SIZE},${cell}px)`,"--cell":`${cell}px`,cursor:tool?"crosshair":"default",touchAction:"none"}}>
           {grid.map((row,r)=>row.map((cell,c)=>{const key=`${r}-${c}`;const isC=clearing.has(key);const inP=previewKeys?.keys.has(key);let cls="cell";if(cell)cls+=" filled";if(isC)cls+=" clearing";if(inP&&previewKeys.ok)cls+=" preview";return <div key={key} className={cls} style={{background:cell||undefined,"--cc":inP?previewKeys.color:cell}} onClick={()=>tool&&useToolOnCell(r,c)} />;}))}
           {floats.map(f=><div key={f.id} className={f.big?"floatScore big":"floatScore"} style={{color:f.color}}>{f.text}</div>)}
         </div>
@@ -575,7 +589,7 @@ export default function BlockBlast(){
         </div>
       )}
 
-      {drag&&<DragGhost drag={drag} />}
+      {drag&&<DragGhost drag={drag} cell={cell} />}
 
       {gameOver&&(()=>{
         const broke = score>preGameBestRef.current;
@@ -630,17 +644,17 @@ function TrayPiece({shape,dragging,onPointerDown}){
   const {rows,cols}=shapeDims(shape.cells);const set=new Set(shape.cells.map(([r,c])=>`${r}-${c}`));const u=17;
   return <div className="trayPiece" style={{...S.trayPiece,opacity:dragging?0.25:1,touchAction:"none"}} onPointerDown={onPointerDown}><div style={{display:"grid",gridTemplateColumns:`repeat(${cols},${u}px)`,gridTemplateRows:`repeat(${rows},${u}px)`,gap:2}}>{Array.from({length:rows*cols}).map((_,idx)=>{const r=Math.floor(idx/cols),c=idx%cols;const on=set.has(`${r}-${c}`);return <div key={idx} style={{width:u,height:u,borderRadius:4,background:on?shape.color:"transparent",boxShadow:on?"inset 0 -3px 0 rgba(0,0,0,0.25),inset 0 2px 0 rgba(255,255,255,0.3)":"none"}}/>;})}</div></div>;
 }
-function DragGhost({drag}){
+function DragGhost({drag,cell=CELL}){
   const {shape}=drag;const {rows,cols}=shapeDims(shape.cells);const set=new Set(shape.cells.map(([r,c])=>`${r}-${c}`));
-  const left=drag.x-(drag.anchorC+0.5)*(CELL+GAP),top=drag.y-(drag.anchorR+0.5)*(CELL+GAP);
-  return <div style={{position:"fixed",left,top,pointerEvents:"none",zIndex:200,display:"grid",gridTemplateColumns:`repeat(${cols},${CELL}px)`,gridTemplateRows:`repeat(${rows},${CELL}px)`,gap:GAP,filter:"drop-shadow(0 8px 16px rgba(0,0,0,0.5))"}}>{Array.from({length:rows*cols}).map((_,idx)=>{const r=Math.floor(idx/cols),c=idx%cols;const on=set.has(`${r}-${c}`);return <div key={idx} style={{width:CELL,height:CELL,borderRadius:7,background:on?shape.color:"transparent",boxShadow:on?"inset 0 -4px 0 rgba(0,0,0,0.28),inset 0 3px 0 rgba(255,255,255,0.35)":"none"}}/>;})}</div>;
+  const left=drag.x-(drag.anchorC+0.5)*(cell+GAP),top=drag.y-(drag.anchorR+0.5)*(cell+GAP);
+  return <div style={{position:"fixed",left,top,pointerEvents:"none",zIndex:200,display:"grid",gridTemplateColumns:`repeat(${cols},${cell}px)`,gridTemplateRows:`repeat(${rows},${cell}px)`,gap:GAP,filter:"drop-shadow(0 8px 16px rgba(0,0,0,0.5))"}}>{Array.from({length:rows*cols}).map((_,idx)=>{const r=Math.floor(idx/cols),c=idx%cols;const on=set.has(`${r}-${c}`);return <div key={idx} style={{width:cell,height:cell,borderRadius:7,background:on?shape.color:"transparent",boxShadow:on?"inset 0 -4px 0 rgba(0,0,0,0.28),inset 0 3px 0 rgba(255,255,255,0.35)":"none"}}/>;})}</div>;
 }
 
 const css=`
 @import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@700;800;900&display=swap');
 *{box-sizing:border-box;}
 .board{position:relative;}
-.cell{width:38px;height:38px;border-radius:7px;background:rgba(255,255,255,0.04);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.04);transition:transform .08s,background .1s;}
+.cell{width:var(--cell,38px);height:var(--cell,38px);border-radius:7px;background:rgba(255,255,255,0.04);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.04);transition:transform .08s,background .1s;}
 .cell.filled{box-shadow:inset 0 -4px 0 rgba(0,0,0,0.28),inset 0 3px 0 rgba(255,255,255,0.35);}
 .cell.preview{background:var(--cc)!important;opacity:.55;}
 .cell.clearing{animation:pop .3s ease forwards;}
