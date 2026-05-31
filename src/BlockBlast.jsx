@@ -826,8 +826,8 @@ export default function BlockBlast(){
       <div style={S.header}>
         <div style={S.title}>BLOCK <span style={{color:"#ffd23d"}}>BLAST</span></div>
         <div style={S.viewToggle}>
-          <button className={`vt ${mode==="match"?"on":""}`} onClick={enterMatch}>对局</button>
-          <button className={`vt ${mode==="puzzle"?"on":""}`} onClick={enterPuzzleMode}>残局</button>
+          <button className={`vt ${mode==="match"?"on":""}`} onClick={enterMatch}>无尽模式</button>
+          <button className={`vt ${mode==="puzzle"?"on":""}`} onClick={enterPuzzleMode}>关卡模式</button>
         </div>
       </div>
 
@@ -866,7 +866,7 @@ export default function BlockBlast(){
       {/* 残局: 选关界面 */}
       {mode==="puzzle"&&!puzzle&&(
         <div style={S.levelWrap}>
-          <div style={S.debugHead}>🧩 残局 · 选择关卡</div>
+          <div style={S.debugHead}>🧩 关卡模式 · 选择关卡</div>
           <div style={S.levelGrid}>
             {PUZZLES.map(p=>{const s=pzStars[p.id]||0;return (
               <button key={p.id} style={S.levelBtn} onClick={()=>loadPuzzle(p)}>
@@ -881,7 +881,7 @@ export default function BlockBlast(){
                 <div style={{fontSize:11,opacity:.85}}>🔒 点击解锁(IAP占位)</div>
               </button>))}
           </div>
-          <div style={S.howto}>收集型残局:消除经过元素的行/列收集对应元素,限步数内集齐配额过关 · 剩余步数越多星级越高</div>
+          <div style={S.howto}>关卡模式:消除经过元素的行/列收集对应元素,限步数内集齐配额过关 · 剩余步数越多星级越高</div>
         </div>
       )}
 
