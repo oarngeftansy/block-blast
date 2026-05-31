@@ -563,13 +563,17 @@ export default function BlockBlast(){
     aR=Math.max(0,Math.min(rows-1,aR));aC=Math.max(0,Math.min(cols-1,aC));
     setDrag({idx,shape,x:e.clientX,y:e.clientY,anchorR:aR,anchorC:aC});
   };
+  const dragRef=useRef(null);
+  useEffect(()=>{dragRef.current=drag;},[drag]);
+  const dragId=drag?.shape?.id??null; // 仅拖拽开始/结束时变化
   useEffect(()=>{
-    if(!drag)return;
-    const move=e=>{const x=e.clientX,y=e.clientY;setDrag(d=>d?{...d,x,y}:d);setHoverOrigin(computeOrigin(x,y,drag.anchorR,drag.anchorC));};
-    const up=e=>{const o=computeOrigin(e.clientX,e.clientY,drag.anchorR,drag.anchorC);if(o&&canPlace(gridRef.current,drag.shape.cells,o.r,o.c))place(drag.idx,o.r,o.c);setDrag(null);setHoverOrigin(null);};
+    if(!dragId)return;
+    // 监听只在一次拖拽内挂载一次, 拖拽中不再反复增删 -> 移动端不丢 pointermove, 实时跟手
+    const move=e=>{const x=e.clientX,y=e.clientY;const dr=dragRef.current;if(!dr)return;setDrag(d=>d?{...d,x,y}:d);setHoverOrigin(computeOrigin(x,y,dr.anchorR,dr.anchorC));};
+    const up=e=>{const dr=dragRef.current;if(dr){const o=computeOrigin(e.clientX,e.clientY,dr.anchorR,dr.anchorC);if(o&&canPlace(gridRef.current,dr.shape.cells,o.r,o.c))place(dr.idx,o.r,o.c);}setDrag(null);setHoverOrigin(null);};
     window.addEventListener("pointermove",move);window.addEventListener("pointerup",up);window.addEventListener("pointercancel",up);
     return()=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",up);window.removeEventListener("pointercancel",up);};
-  },[drag]);
+  },[dragId]); // eslint-disable-line
 
   // ====== 道具 ======
   const useToolOnCell=(r,c)=>{
@@ -935,9 +939,10 @@ const css=`
 .board{position:relative;}
 .cell{position:relative;width:var(--cell,38px);height:var(--cell,38px);border-radius:7px;background:rgba(255,255,255,0.04);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.04);transition:transform .08s,background .1s;}
 .cell.filled{box-shadow:inset 0 -4px 0 rgba(0,0,0,0.28),inset 0 3px 0 rgba(255,255,255,0.35);}
-.cell.target{box-shadow:inset 0 0 0 3px rgba(255,255,255,0.92),inset 0 -4px 0 rgba(0,0,0,0.25);animation:tpulse 1.1s ease-in-out infinite;}
-.cell.target::after{content:"★";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:calc(var(--cell,38px) * 0.5);color:rgba(0,0,0,0.55);line-height:1;}
-@keyframes tpulse{0%,100%{filter:brightness(1);}50%{filter:brightness(1.45);}}
+.cell.target{box-shadow:inset 0 0 0 3px rgba(255,255,255,0.92),inset 0 -4px 0 rgba(0,0,0,0.25);}
+.cell.target::after{content:"★";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:calc(var(--cell,38px) * 0.5);color:rgba(0,0,0,0.6);line-height:1;animation:tstar 1.2s ease-in-out infinite;will-change:opacity,transform;}
+/* 只动 opacity/transform(合成层, 不触发重绘) -> 移动端也不拖累触摸 */
+@keyframes tstar{0%,100%{opacity:.5;transform:scale(1);}50%{opacity:1;transform:scale(1.12);}}
 .cell.preview{background:var(--cc)!important;opacity:.55;}
 .cell.clearing{animation:pop .3s ease forwards;}
 @keyframes pop{0%{transform:scale(1);}40%{transform:scale(1.3);filter:brightness(2);}100%{transform:scale(0);opacity:0;}}
