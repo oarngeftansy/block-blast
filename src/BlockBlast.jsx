@@ -68,7 +68,7 @@ const MICRO_JUMP = {
   4: {dur:1, delta:+1, label:"4号·升1级×1组"},
   5: {dur:2, delta:+2, label:"5号·升2级×2组"},
 };
-// 各难度的触发阈值: 断杆(连续未消除)触发3号(降), 连击(combo)触发4号(升)
+// 各难度的触发阈值: 空放(连续未消除)触发3号(降), 连击(combo)触发4号(升)
 const MICRO_TRIGGERS = {
   普通:{breakN:4, comboN:25},
   困难:{breakN:5, comboN:20},
@@ -399,7 +399,7 @@ export default function BlockBlast(){
   const [dgState,setDgState]=useState(()=>({tpl:"L2''",seq:TEMPLATES["L2''"],dgIdx:0,roundInDg:0}));
 
   // ===== 微观跳转运行时状态 =====
-  // breakStreak: 连续未消除落子数(断杆)
+  // breakStreak: 连续未消除落子数(空放)
   // jump: 当前激活的跳转 {code, dur(剩余作用组数), delta, special} 或 null
   // capped: 是否已进入2号DG6/DGS收尾循环
   // lastDgIdx: 用于检测"进入新一组(DG槽)"以递减dur
@@ -503,7 +503,7 @@ export default function BlockBlast(){
     keysTmp.forEach(k=>{const[r,c]=k.split("-").map(Number);afterGrid[r][c]=null;});
 
     if(inRecordGroup){
-      // === 破纪录局组专用触发器(独立, 不用断杆/连击) ===
+      // === 破纪录局组专用触发器(独立, 不用空放/连击) ===
       const occupied = afterGrid.flat().filter(Boolean).length;
       const fillRatio = occupied / (SIZE*SIZE);
       const projScore = scoreRef.current + placeGain;
@@ -511,14 +511,14 @@ export default function BlockBlast(){
       if(fillRatio >= RECORD_FILL_RATIO) fireJump(1);
       // 分数 >= best*120% -> 2号 增难压制(稳赢纪录时压制破纪录幅度)
       if(best>0 && !m.capped && projScore >= best*RECORD_LEAD_RATIO) fireJump(2);
-      // 断杆计数仍维护(供面板显示), 但不触发常规跳转
+      // 空放计数仍维护(供面板显示), 但不触发常规跳转
       m.breakStreak = lines===0 ? m.breakStreak+1 : 0;
     } else {
-      // === 常规局触发器: 断杆/连击/全清 ===
+      // === 常规局触发器: 空放/连击/全清 ===
       const trig = MICRO_TRIGGERS[curDifficulty] || MICRO_TRIGGERS.普通;
       if(lines===0){
         m.breakStreak += 1;
-        if(m.breakStreak >= trig.breakN) fireJump(3); // 断杆 -> 3号(降1级×1组)
+        if(m.breakStreak >= trig.breakN) fireJump(3); // 空放 -> 3号(降1级×1组)
       } else {
         m.breakStreak = 0;
         const newComboVal = comboRef.current + 1;
@@ -976,8 +976,8 @@ export default function BlockBlast(){
               </>
             ) : (
               <>
-                <Row k="本局触发阈值" v={`断杆≥${(MICRO_TRIGGERS[curDifficulty]||MICRO_TRIGGERS.普通).breakN} 连击≥${(MICRO_TRIGGERS[curDifficulty]||MICRO_TRIGGERS.普通).comboN}`} />
-                <Row k="当前断杆 / 连击" v={`${microRef.current.breakStreak} / ${combo}`} />
+                <Row k="本局触发阈值" v={`空放≥${(MICRO_TRIGGERS[curDifficulty]||MICRO_TRIGGERS.普通).breakN} 连击≥${(MICRO_TRIGGERS[curDifficulty]||MICRO_TRIGGERS.普通).comboN}`} />
+                <Row k="当前空放 / 连击" v={`${microRef.current.breakStreak} / ${combo}`} />
               </>
             )}
             <div style={{marginTop:8,display:"flex",gap:8,flexWrap:"wrap"}}>
