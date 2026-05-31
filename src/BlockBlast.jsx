@@ -231,6 +231,15 @@ const isRookieLevel=(sched)=>sched.round===1&&sched.gameNo===1;
 // 按当前调度状态发牌: 新手第一关走爽感发牌, 否则走常规 DG 发牌
 const dealForState=(grid,sched,dg,recentRef)=>isRookieLevel(sched)?dealRookieTray(grid):dealTray(grid,shiftDG(dg,MATCH_DG_BOOST),recentRef);
 
+// 关卡模式脱困: 只发"在当前棋盘上至少有一个合法落点"的方块; 棋盘全满则返回 null
+function dealPlaceableTray(grid){
+  const placeable=[]; for(let i=0;i<SHAPES.length;i++)if(countPlacements(grid,SHAPES[i])>0)placeable.push(i);
+  if(!placeable.length)return null;
+  const out=[],used=new Set();
+  for(let k=0;k<3;k++){const pool=placeable.filter(i=>!used.has(i));const arr=pool.length?pool:placeable;const si=arr[Math.floor(Math.random()*arr.length)];used.add(si);out.push(mkShape(si));}
+  return out;
+}
+
 const resolveSlot=(loopIndex,recordPhase)=>recordPhase>0?`破纪录${recordPhase}`:DIFF_CYCLE[loopIndex];
 const tierName=(ass)=>ass<TIER_THRESHOLDS.low?"低阶":ass>TIER_THRESHOLDS.high?"高阶":"中阶";
 function resolveTemplate(tier,slot){
@@ -740,9 +749,12 @@ export default function BlockBlast(){
     const rem=trayArr.filter(Boolean);
     const stuck=rem.length>0 && !rem.some(s=>anyPlacement(g,s));
     if(stuck){
+      const fresh=dealPlaceableTray(g);     // 自动刷新出能放下的方块, 不让玩家卡死
+      if(fresh){ setTray(fresh); setPzStuck(false); placeFloat("🔀 无处可放 · 已自动刷新方块","#5e8bff"); return; }
+      // 棋盘已满, 一格都放不下 -> 只能靠道具炸开, 没道具才判负
       const p=powersRef.current;
-      if(p&&(p.bomb>0||p.rowcol>0)){ setPzStuck(true); placeFloat("无处可放 · 用道具炸开空间!","#ffd23d"); } // 还有道具就不判负
-      else losePuzzle(); // 既走不动又没道具 -> 失败
+      if(p&&(p.bomb>0||p.rowcol>0)){ setPzStuck(true); placeFloat("棋盘已满 · 用道具炸开空间!","#ffd23d"); }
+      else losePuzzle();
     } else setPzStuck(false);
   };
   // 收集 removedKeys 上的元素并补种(道具消除走这里, 不消耗步数)
