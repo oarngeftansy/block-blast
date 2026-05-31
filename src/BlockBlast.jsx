@@ -24,7 +24,7 @@ const computeCell = () => {
 // ============== 调度配置 (config_flow.yaml 占位实现) ==============
 const DIFF_CYCLE = ["普通","困难","极难","普通","困难","困难","普通","普通","极难","普通"];
 const RECORD_GROUP_LEN = 3;
-const TIER_THRESHOLDS = { low: 400, high: 1500 };
+const TIER_THRESHOLDS = { low: 1000, high: 1500 };
 
 const TEMPLATE_TABLE = {
   "低阶|普通":"L1","低阶|破纪录1":"L1'","低阶|破纪录2":"L1''","低阶|破纪录3":"L2",
@@ -981,8 +981,8 @@ export default function BlockBlast(){
               </>
             )}
             <div style={{marginTop:8,display:"flex",gap:8,flexWrap:"wrap"}}>
-              <button style={S.dbgBtn} onClick={()=>setSched(s=>({...s,ass:200,tier:"低阶",firstTiered:true}))}>低阶(200)</button>
-              <button style={S.dbgBtn} onClick={()=>setSched(s=>({...s,ass:900,tier:"中阶",firstTiered:true}))}>中阶(900)</button>
+              <button style={S.dbgBtn} onClick={()=>setSched(s=>({...s,ass:600,tier:"低阶",firstTiered:true}))}>低阶(600)</button>
+              <button style={S.dbgBtn} onClick={()=>setSched(s=>({...s,ass:1200,tier:"中阶",firstTiered:true}))}>中阶(1200)</button>
               <button style={S.dbgBtn} onClick={()=>setSched(s=>({...s,ass:1700,tier:"高阶",firstTiered:true}))}>高阶(1700)</button>
             </div>
             <ScoreCurve history={sched.history} />
