@@ -238,6 +238,40 @@ function resolveTemplate(tier,slot){
   const def={低阶:"L1",中阶:"L2''",高阶:"L4"}[tier]||"L2"; return{tpl:def,fallback:true};
 }
 
+// ============== 残局(关卡)模式: 数据与工具 ==============
+const PZ_OBSTACLE="#5a6478";  // 障碍块(普通预置块)
+const PZ_TARGET="#ffcf33";    // 目标格(需消除, 高亮+脉冲)
+// 棋盘字符串: '.'=空, 'X'=障碍块, 'T'=目标格
+function parsePuzzleBoard(rows){
+  const grid=emptyGrid(); const targets=new Set();
+  for(let r=0;r<SIZE;r++){const line=rows[r]||"";for(let c=0;c<SIZE;c++){
+    const ch=line[c]||'.';
+    if(ch==='X')grid[r][c]=PZ_OBSTACLE;
+    else if(ch==='T'){grid[r][c]=PZ_TARGET;targets.add(`${r}-${c}`);}
+  }}
+  return {grid,targets};
+}
+// 内置关卡(均已手工验证可解; goal:'targets'=消除全部目标格, 'clearAll'=清空棋盘)
+// pieces 为固定方块队列(SHAPE_DEFS 索引), 每发 3 块、用完一波再发下一波
+const PUZZLES=[
+  {id:'p1',name:'1 · 补位',     goal:'targets', par:1, pieces:[0,1,3],
+   board:["........","........","........","........","........","........","........","TXXXXXT."]},
+  {id:'p2',name:'2 · 双行',     goal:'targets', par:2, pieces:[0,0,1,2],
+   board:["........","........","........","........","........","........","TXXXXXX.",".XXXXXXT"]},
+  {id:'p3',name:'3 · 通天柱',   goal:'targets', par:1, pieces:[0,2,1],
+   board:["T.......","X.......","X.......","X.......","X.......","X.......","X.......","........"]},
+  {id:'p4',name:'4 · 清盘',     goal:'clearAll',par:1, pieces:[9,1,2],
+   board:["........","........","........","........","........","........","XXXXXX..","XXXXXX.."]},
+  {id:'p5',name:'5 · 左右开弓', goal:'targets', par:2, pieces:[3,3,1],
+   board:["........","........","........","........","........","........","...XXXXT","TXXXX..."]},
+];
+// IAP 占位: 锁定的付费关卡包(仅演示变现位置, 不接真实支付)
+const PZ_LOCKED_PACKS=[{id:'neon',name:'🌆 霓虹包 · 60关'},{id:'ice',name:'🧊 寒冰包 · 60关'}];
+const PZ_STORE_KEY="bb_puzzle_stars";
+const loadStars=()=>{try{return JSON.parse(localStorage.getItem(PZ_STORE_KEY)||"{}");}catch(e){return {};}};
+const saveStars=(m)=>{try{localStorage.setItem(PZ_STORE_KEY,JSON.stringify(m));}catch(e){}};
+const starStr=(n)=>"★★★".slice(0,n)+"☆☆☆".slice(0,3-n);
+
 // =====================================================================
 export default function BlockBlast(){
   const [grid,setGrid]=useState(emptyGrid);
@@ -265,6 +299,18 @@ export default function BlockBlast(){
     window.addEventListener("orientationchange",onResize);
     return()=>{window.removeEventListener("resize",onResize);window.removeEventListener("orientationchange",onResize);};
   },[]);
+
+  // ===== 残局(关卡)模式状态 =====
+  const [mode,setMode]=useState("match");        // 'match' 对局 | 'puzzle' 残局
+  const [puzzle,setPuzzle]=useState(null);        // 当前残局定义(null=选关界面)
+  const [pzTargets,setPzTargets]=useState(()=>new Set());
+  const [pzPiecesLeft,setPzPiecesLeft]=useState(0);
+  const [pzResult,setPzResult]=useState(null);    // null | {win,stars,used}
+  const [pzStars,setPzStars]=useState(loadStars);
+  const modeRef=useRef("match"), puzzleRef=useRef(null);
+  const pzTargetsRef=useRef(new Set()), pzQueueRef=useRef([]), pzUsedRef=useRef(0);
+  useEffect(()=>{modeRef.current=mode;},[mode]);
+  useEffect(()=>{puzzleRef.current=puzzle;},[puzzle]);
 
   const [sched,setSched]=useState(()=>({
     round:1,loopIndex:0,recordPhase:0,gameNo:1,tier:"中阶",ass:0,
@@ -338,6 +384,7 @@ export default function BlockBlast(){
 
   // ====== 放置 + 真实计分 + 微观跳转触发 ======
   const place=(idx,r0,c0)=>{
+    if(modeRef.current==="puzzle")return placePuzzle(idx,r0,c0); // 残局走专用放置
     const curTray=trayRef.current,curGrid=gridRef.current;
     const shape=curTray[idx];
     if(!shape||!canPlace(curGrid,shape.cells,r0,c0))return false;
@@ -485,9 +532,7 @@ export default function BlockBlast(){
 
   const startKey=`${sched.round}-${sched.gameNo}`;
   const startKeyRef=useRef(null);
-  useEffect(()=>{
-    if(startKeyRef.current===startKey)return;
-    startKeyRef.current=startKey;
+  const initMatchLevel=()=>{
     preGameBestRef.current=Math.max(best,0); // 记录本局开始前的历史最高分
     const slot=resolveSlot(sched.loopIndex,sched.recordPhase);
     const {tpl}=resolveTemplate(sched.tier,slot);
@@ -499,6 +544,12 @@ export default function BlockBlast(){
     setTray(dealForState(fresh,sched,seq[0],recentShapesRef));
     setScore(0);setCombo(0);setStreakLeft(STREAK_WINDOW);setGameOver(false);setTool(null);
     setPowers({undo:3,bomb:2,rowcol:2});setDrag(null);setHoverOrigin(null);setCanUndo(false);undoSnapRef.current=null;
+  };
+  useEffect(()=>{
+    if(startKeyRef.current===startKey)return;
+    startKeyRef.current=startKey;
+    if(modeRef.current!=="match")return; // 残局模式下不重置对局
+    initMatchLevel();
   },[startKey]); // eslint-disable-line
 
   // ====== 拖拽 ======
@@ -522,14 +573,16 @@ export default function BlockBlast(){
 
   // ====== 道具 ======
   const useToolOnCell=(r,c)=>{
-    if(tool==="bomb"){if(powers.bomb<=0)return;const g=grid.map(row=>row.slice());let rm=0;
-      for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){const nr=r+dr,nc=c+dc;if(nr>=0&&nr<SIZE&&nc>=0&&nc<SIZE&&g[nr][nc]){g[nr][nc]=null;rm++;}}
+    if(tool==="bomb"){if(powers.bomb<=0)return;const g=grid.map(row=>row.slice());let rm=0;const removed=[];
+      for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){const nr=r+dr,nc=c+dc;if(nr>=0&&nr<SIZE&&nc>=0&&nc<SIZE&&g[nr][nc]){g[nr][nc]=null;rm++;removed.push(`${nr}-${nc}`);}}
       if(rm){triggerShake();placeFloat(`💣 -${rm}`,"#ff5e7e");setScore(s=>s+rm*2);}
       setGrid(g);setPowers(p=>({...p,bomb:p.bomb-1}));setTool(null);setCanUndo(false);undoSnapRef.current=null;revive(g);
-    }else if(tool==="rowcol"){if(powers.rowcol<=0)return;const g=grid.map(row=>row.slice());let rm=0;
-      for(let cc=0;cc<SIZE;cc++)if(g[r][cc]){g[r][cc]=null;rm++;}for(let rr=0;rr<SIZE;rr++)if(g[rr][c]){g[rr][c]=null;rm++;}
+      if(modeRef.current==="puzzle")pzAfterRemoval(removed,g);
+    }else if(tool==="rowcol"){if(powers.rowcol<=0)return;const g=grid.map(row=>row.slice());let rm=0;const removed=[];
+      for(let cc=0;cc<SIZE;cc++)if(g[r][cc]){g[r][cc]=null;rm++;removed.push(`${r}-${cc}`);}for(let rr=0;rr<SIZE;rr++)if(g[rr][c]){g[rr][c]=null;rm++;removed.push(`${rr}-${c}`);}
       if(rm){triggerShake();placeFloat(`✚ -${rm}`,"#3dd6e0");setScore(s=>s+rm*2);}
       setGrid(g);setPowers(p=>({...p,rowcol:p.rowcol-1}));setTool(null);setCanUndo(false);undoSnapRef.current=null;revive(g);
+      if(modeRef.current==="puzzle")pzAfterRemoval(removed,g);
     }
   };
   // 撤销上一步: 从快照完整回滚棋盘/托盘/分数/连击/DG进度/跳转状态
@@ -537,6 +590,17 @@ export default function BlockBlast(){
     if(powers.undo<=0) return;
     const snap=undoSnapRef.current;
     if(!snap){ placeFloat("无可撤销步骤","#8892a6"); return; }
+    if(snap.mode==="puzzle"){ // 残局撤销: 回滚棋盘/托盘/目标/队列
+      setGrid(snap.grid.map(row=>row.slice()));
+      setTray(snap.tray.map(s=>s?{...s}:null));
+      setScore(snap.score); setCombo(snap.combo); setStreakLeft(snap.streakLeft);
+      pzTargetsRef.current=new Set(snap.pzTargets); setPzTargets(new Set(snap.pzTargets));
+      pzQueueRef.current=[...snap.pzQueue]; pzUsedRef.current=snap.pzUsed;
+      setPzPiecesLeft(snap.pzQueue.length+snap.tray.filter(Boolean).length);
+      setPzResult(null); setGameOver(false);
+      setPowers(p=>({...p,undo:p.undo-1})); setCanUndo(false); undoSnapRef.current=null; setTool(null);
+      placeFloat("↩ 撤销","#5e8bff"); return;
+    }
     setGrid(snap.grid.map(row=>row.slice()));
     setTray(snap.tray.map(s=>s?{...s}:null));
     setScore(snap.score); setCombo(snap.combo); setStreakLeft(snap.streakLeft);
@@ -552,6 +616,97 @@ export default function BlockBlast(){
   };
   const revive=(g)=>{const rem=trayRef.current.filter(Boolean);if(gameOver&&rem.some(s=>anyPlacement(g,s)))setGameOver(false);};
 
+  // ===== 残局模式逻辑 =====
+  const iapDemo=(label)=>placeFloat(`(演示) ${label} · 未接支付`,"#ffd23d");
+  const winPuzzle=()=>{
+    const def=puzzleRef.current; if(!def)return; const used=pzUsedRef.current;
+    const stars = used<=def.par?3:used<=def.par+2?2:1;
+    setPzResult({win:true,stars,used});
+    setPzStars(prev=>{const m={...prev}; if((m[def.id]||0)<stars){m[def.id]=stars;saveStars(m);} return m;});
+    placeFloat("🎉 通关!","#ffd23d",true); triggerShake(true);
+  };
+  const losePuzzle=()=>setPzResult({win:false,stars:0,used:pzUsedRef.current});
+  const checkPuzzleEnd=(g,trayArr)=>{
+    const def=puzzleRef.current; if(!def||pzResult)return;
+    const won = def.goal==="clearAll" ? g.every(row=>row.every(c=>!c)) : pzTargetsRef.current.size===0;
+    if(won){winPuzzle();return;}
+    const rem=trayArr.filter(Boolean);
+    const outOfPieces = rem.length===0 && pzQueueRef.current.length===0;
+    const stuck = rem.length>0 && !rem.some(s=>anyPlacement(g,s)); // 还有块但都放不下
+    if(outOfPieces||stuck)losePuzzle();
+  };
+  const pzAfterRemoval=(removedKeys,g)=>{
+    const tset=new Set(pzTargetsRef.current); removedKeys.forEach(k=>tset.delete(k));
+    pzTargetsRef.current=tset; setPzTargets(new Set(tset));
+    setTimeout(()=>checkPuzzleEnd(g,trayRef.current),0);
+  };
+  const placePuzzle=(idx,r0,c0)=>{
+    const curTray=trayRef.current,curGrid=gridRef.current;
+    const shape=curTray[idx];
+    if(!shape||!canPlace(curGrid,shape.cells,r0,c0))return false;
+    undoSnapRef.current={mode:"puzzle",grid:curGrid.map(r=>r.slice()),tray:curTray.map(s=>s?{...s}:null),score:scoreRef.current,combo:comboRef.current,streakLeft:streakRef.current,pzTargets:new Set(pzTargetsRef.current),pzQueue:[...pzQueueRef.current],pzUsed:pzUsedRef.current};
+    setCanUndo(true);
+    const g=curGrid.map(r=>r.slice());
+    shape.cells.forEach(([dr,dc])=>{g[r0+dr][c0+dc]=shape.color;});
+    pzUsedRef.current+=1;
+    const placeGain=shape.cells.length*SCORE.perCellPlace;
+    const fullRows=[],fullCols=[];
+    for(let r=0;r<SIZE;r++)if(g[r].every(c=>c))fullRows.push(r);
+    for(let c=0;c<SIZE;c++)if(g.every(row=>row[c]))fullCols.push(c);
+    const lines=fullRows.length+fullCols.length;
+    const newTrayArr=curTray.slice(); newTrayArr[idx]=null;
+    let finalTray=newTrayArr;
+    if(newTrayArr.every(s=>s===null)){const q=pzQueueRef.current;const next=q.splice(0,3).map(si=>mkShape(si));while(next.length<3)next.push(null);if(next.some(Boolean))finalTray=next;}
+    setTray(finalTray);
+    setPzPiecesLeft(pzQueueRef.current.length+finalTray.filter(Boolean).length);
+    if(lines===0){
+      setScore(s=>s+placeGain); setGrid(g);
+      setTimeout(()=>checkPuzzleEnd(g,finalTray),0);
+      return true;
+    }
+    const cellsCleared=fullRows.length*SIZE+fullCols.length*SIZE-(fullRows.length*fullCols.length);
+    const baseClear=cellsCleared*SCORE.perCellClear;
+    const lineMult=SCORE.lineMult[Math.min(lines,5)]||SCORE.lineMult[5];
+    const newCombo=comboRef.current+1; const comboMult=1+newCombo*SCORE.comboStep;
+    const gain=Math.round((placeGain+baseClear*lineMult)*comboMult);
+    setCombo(newCombo); setStreakLeft(STREAK_WINDOW);
+    const keys=new Set();
+    fullRows.forEach(r=>{for(let c=0;c<SIZE;c++)keys.add(`${r}-${c}`);});
+    fullCols.forEach(c=>{for(let r=0;r<SIZE;r++)keys.add(`${r}-${c}`);});
+    setClearing(keys);
+    const big=lines>=2; triggerShake(big);
+    const label=`+${gain}`+(lines>=2?`  ${lines}连消!`:"")+(newCombo>1?`  ×${comboMult.toFixed(1)} COMBO`:"");
+    placeFloat(label, lines>=4?"#ffd23d":lines>=2?"#ffa63d":"#5ee07a", big);
+    setTimeout(()=>{
+      const cleared=g.map(r=>r.slice());
+      keys.forEach(k=>{const[r,c]=k.split("-").map(Number);cleared[r][c]=null;});
+      setClearing(new Set()); setScore(s=>s+gain); setGrid(cleared);
+      const tset=new Set(pzTargetsRef.current); keys.forEach(k=>tset.delete(k));
+      pzTargetsRef.current=tset; setPzTargets(new Set(tset));
+      checkPuzzleEnd(cleared,finalTray);
+    }, big?320:280);
+    return true;
+  };
+  const loadPuzzle=(def)=>{
+    const {grid:pg,targets}=parsePuzzleBoard(def.board);
+    let tset=targets;
+    if(def.goal==="clearAll"){tset=new Set();pg.forEach((row,r)=>row.forEach((v,c)=>{if(v)tset.add(`${r}-${c}`);}));}
+    setPuzzle(def); puzzleRef.current=def;
+    pzTargetsRef.current=new Set(tset); setPzTargets(new Set(tset));
+    const queue=[...def.pieces];
+    const first=queue.splice(0,3).map(si=>mkShape(si)); while(first.length<3)first.push(null);
+    pzQueueRef.current=queue; pzUsedRef.current=0;
+    setPzPiecesLeft(queue.length+first.filter(Boolean).length);
+    setGrid(pg); setTray(first);
+    setScore(0); setCombo(0); setStreakLeft(STREAK_WINDOW); setGameOver(false); setPzResult(null);
+    setPowers({undo:2,bomb:1,rowcol:1}); setTool(null); setDrag(null); setHoverOrigin(null);
+    setCanUndo(false); undoSnapRef.current=null; setClearing(new Set());
+  };
+  const enterPuzzleMode=()=>{setMode("puzzle");modeRef.current="puzzle";setPuzzle(null);puzzleRef.current=null;setPzResult(null);setGameOver(false);setTool(null);setDrag(null);setCanUndo(false);undoSnapRef.current=null;};
+  const backToLevels=()=>{setPuzzle(null);puzzleRef.current=null;setPzResult(null);setTool(null);setDrag(null);};
+  const enterMatch=()=>{setMode("match");modeRef.current="match";setPuzzle(null);puzzleRef.current=null;setPzResult(null);initMatchLevel();startKeyRef.current=startKey;};
+  const nextPuzzle=()=>{const def=puzzleRef.current;const i=PUZZLES.findIndex(p=>p.id===def?.id);const nx=PUZZLES[i+1];if(nx)loadPuzzle(nx);else backToLevels();};
+
   useEffect(()=>{setBest(b=>Math.max(b,score));},[score]);
 
   const previewKeys=(()=>{if(!drag||!hoverOrigin)return null;const ok=canPlace(grid,drag.shape.cells,hoverOrigin.r,hoverOrigin.c);const keys=new Set();if(ok)drag.shape.cells.forEach(([dr,dc])=>keys.add(`${hoverOrigin.r+dr}-${hoverOrigin.c+dc}`));return{ok,keys,color:drag.shape.color};})();
@@ -564,11 +719,19 @@ export default function BlockBlast(){
       <div style={S.header}>
         <div style={S.title}>BLOCK <span style={{color:"#ffd23d"}}>BLAST</span></div>
         <div style={S.viewToggle}>
-          <button className={`vt ${view==="play"?"on":""}`} onClick={()=>setView("play")}>体验视图</button>
-          <button className={`vt ${view==="design"?"on":""}`} onClick={()=>setView("design")}>难度调控</button>
+          <button className={`vt ${mode==="match"?"on":""}`} onClick={enterMatch}>对局</button>
+          <button className={`vt ${mode==="puzzle"?"on":""}`} onClick={enterPuzzleMode}>残局</button>
         </div>
       </div>
 
+      {mode==="match"&&(
+        <div style={{...S.viewToggle,marginBottom:8}}>
+          <button className={`vt ${view==="play"?"on":""}`} onClick={()=>setView("play")}>体验视图</button>
+          <button className={`vt ${view==="design"?"on":""}`} onClick={()=>setView("design")}>难度调控</button>
+        </div>
+      )}
+
+      {mode==="match"&&(<>
       <div style={S.scoreStrip}>
         <div style={S.scoreBox}><div style={S.scoreLabel}>SCORE</div><div style={S.scoreVal}>{score}</div></div>
         <div style={S.scoreBox}><div style={S.scoreLabel}>BEST</div><div style={{...S.scoreVal,color:"#ffa63d"}}>{Math.max(best,score)}</div></div>
@@ -591,10 +754,49 @@ export default function BlockBlast(){
       </div>
 
       {combo>1&&!gameOver&&<div style={S.comboBanner}>🔥 连击 ×{combo} · 倍率 ×{(1+combo*SCORE.comboStep).toFixed(1)}</div>}
+      </>)}
 
+      {/* 残局: 选关界面 */}
+      {mode==="puzzle"&&!puzzle&&(
+        <div style={S.levelWrap}>
+          <div style={S.debugHead}>🧩 残局 · 选择关卡</div>
+          <div style={S.levelGrid}>
+            {PUZZLES.map(p=>{const s=pzStars[p.id]||0;return (
+              <button key={p.id} style={S.levelBtn} onClick={()=>loadPuzzle(p)}>
+                <div style={{fontWeight:800}}>{p.name}</div>
+                <div style={{color:"#ffd23d",fontSize:14,letterSpacing:2}}>{starStr(s)}</div>
+              </button>);})}
+            {PZ_LOCKED_PACKS.map(p=>(
+              <button key={p.id} style={{...S.levelBtn,opacity:.62}} onClick={()=>iapDemo("解锁 "+p.name)}>
+                <div style={{fontWeight:800}}>{p.name}</div>
+                <div style={{fontSize:11,opacity:.85}}>🔒 点击解锁(IAP占位)</div>
+              </button>))}
+          </div>
+          <div style={S.howto}>消除全部高亮目标格(★)即过关 · 用的方块越少星级越高</div>
+        </div>
+      )}
+
+      {/* 残局: 关卡内 HUD + IAP 占位商店 */}
+      {mode==="puzzle"&&puzzle&&(<>
+        <div style={S.statusBar}>
+          <button className="vt" onClick={backToLevels}>← 选关</button>
+          <span style={{...S.tag,background:"#3a2f66"}}>{puzzle.name}</span>
+          <span style={{...S.tag,background:"#8b3d6b"}}>{puzzle.goal==="clearAll"?`剩余 ${pzTargets.size}`:`目标 ${pzTargets.size}`}</span>
+          <span style={{...S.tag,background:"#2f6b8b"}}>步 {pzUsedRef.current} / {puzzle.par}★</span>
+          <span style={{...S.tag,background:"#3d7a4a"}}>余块 {pzPiecesLeft}</span>
+        </div>
+        <div style={S.shopRow}>
+          <button style={S.shopBtn} onClick={()=>iapDemo("提示")}>💡 提示</button>
+          <button style={S.shopBtn} onClick={()=>iapDemo("+5 方块")}>➕ 方块</button>
+          <button style={S.shopBtn} onClick={()=>iapDemo("道具补给")}>🎁 道具</button>
+          <span style={{fontSize:10,opacity:.5,alignSelf:"center"}}>IAP 占位</span>
+        </div>
+      </>)}
+
+      {(mode==="match"||puzzle)&&(<>
       <div style={S.boardZone}>
         <div ref={boardRef} className={shake?`board shake${shake==="big"?" big":""}`:"board"} style={{...S.board,gridTemplateColumns:`repeat(${SIZE},${cell}px)`,gridTemplateRows:`repeat(${SIZE},${cell}px)`,"--cell":`${cell}px`,cursor:tool?"crosshair":"default",touchAction:"none"}}>
-          {grid.map((row,r)=>row.map((cell,c)=>{const key=`${r}-${c}`;const isC=clearing.has(key);const inP=previewKeys?.keys.has(key);let cls="cell";if(cell)cls+=" filled";if(isC)cls+=" clearing";if(inP&&previewKeys.ok)cls+=" preview";return <div key={key} className={cls} style={{background:cell||undefined,"--cc":inP?previewKeys.color:cell}} onClick={()=>tool&&useToolOnCell(r,c)} />;}))}
+          {grid.map((row,r)=>row.map((cell,c)=>{const key=`${r}-${c}`;const isC=clearing.has(key);const inP=previewKeys?.keys.has(key);let cls="cell";if(cell)cls+=" filled";if(isC)cls+=" clearing";if(inP&&previewKeys.ok)cls+=" preview";if(cell&&pzTargets.has(key))cls+=" target";return <div key={key} className={cls} style={{background:cell||undefined,"--cc":inP?previewKeys.color:cell}} onClick={()=>tool&&useToolOnCell(r,c)} />;}))}
           {floats.map(f=><div key={f.id} className={f.big?"floatScore big":"floatScore"} style={{color:f.color}}>{f.text}</div>)}
         </div>
       </div>
@@ -609,10 +811,11 @@ export default function BlockBlast(){
       <div style={S.tray}>
         {tray.map((shape,i)=><TrayPiece key={i} shape={shape} dragging={drag?.idx===i} onPointerDown={e=>onPiecePointerDown(e,i)} />)}
       </div>
-      <div style={S.howto}>拖动方块到棋盘放置 · 填满整行/列消除 · {STREAK_WINDOW}步内不消除则断连击</div>
+      <div style={S.howto}>{mode==="puzzle"?"拖动方块 · 消除高亮目标格(★)即过关 · 道具可助攻":`拖动方块到棋盘放置 · 填满整行/列消除 · ${STREAK_WINDOW}步内不消除则断连击`}</div>
+      </>)}
 
       {/* 难度调控视图: 调试面板 + 曲线 */}
-      {view==="design"&&(
+      {mode==="match"&&view==="design"&&(
         <div style={S.debugWrap}>
           <div style={S.debugHead}>⚙ 难度调控 · 实时调度状态</div>
           <div style={S.debugBody}>
@@ -651,7 +854,7 @@ export default function BlockBlast(){
 
       {drag&&<DragGhost drag={drag} cell={cell} />}
 
-      {gameOver&&(()=>{
+      {mode==="match"&&gameOver&&(()=>{
         const broke = score>preGameBestRef.current;
         const inGroup = sched.recordPhase>0;
         return (
@@ -666,6 +869,22 @@ export default function BlockBlast(){
         </div></div>
         );
       })()}
+
+      {/* 残局结算 */}
+      {pzResult&&(
+        <div style={S.overlay}><div style={S.modal}>
+          <div style={{...S.goTitle,color:pzResult.win?"#ffd23d":"#ff5e7e"}}>{pzResult.win?"🎉 通关!":"挑战失败"}</div>
+          {pzResult.win&&<div style={{fontSize:32,letterSpacing:6,color:"#ffd23d",margin:"6px 0"}}>{starStr(pzResult.stars)}</div>}
+          <div style={S.goLabel}>{puzzle?.name} · 用了 {pzResult.used} 块{pzResult.win?` · ${puzzle?.par} 块内满星`:" · 目标未达成"}</div>
+          <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
+            <button style={S.playBtn} onClick={()=>loadPuzzle(puzzleRef.current)}>重玩</button>
+            {pzResult.win
+              ? <button style={S.playBtn} onClick={nextPuzzle}>下一关 ▶</button>
+              : <button style={S.playBtn} onClick={()=>iapDemo("+5 方块 续局")}>➕方块</button>}
+            <button style={{...S.dbgBtn,padding:"12px 18px"}} onClick={backToLevels}>选关</button>
+          </div>
+        </div></div>
+      )}
     </div>
   );
 }
@@ -714,8 +933,11 @@ const css=`
 @import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@700;800;900&display=swap');
 *{box-sizing:border-box;}
 .board{position:relative;}
-.cell{width:var(--cell,38px);height:var(--cell,38px);border-radius:7px;background:rgba(255,255,255,0.04);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.04);transition:transform .08s,background .1s;}
+.cell{position:relative;width:var(--cell,38px);height:var(--cell,38px);border-radius:7px;background:rgba(255,255,255,0.04);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.04);transition:transform .08s,background .1s;}
 .cell.filled{box-shadow:inset 0 -4px 0 rgba(0,0,0,0.28),inset 0 3px 0 rgba(255,255,255,0.35);}
+.cell.target{box-shadow:inset 0 0 0 3px rgba(255,255,255,0.92),inset 0 -4px 0 rgba(0,0,0,0.25);animation:tpulse 1.1s ease-in-out infinite;}
+.cell.target::after{content:"★";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:calc(var(--cell,38px) * 0.5);color:rgba(0,0,0,0.55);line-height:1;}
+@keyframes tpulse{0%,100%{filter:brightness(1);}50%{filter:brightness(1.45);}}
 .cell.preview{background:var(--cc)!important;opacity:.55;}
 .cell.clearing{animation:pop .3s ease forwards;}
 @keyframes pop{0%{transform:scale(1);}40%{transform:scale(1.3);filter:brightness(2);}100%{transform:scale(0);opacity:0;}}
@@ -763,6 +985,11 @@ const S={
   traySlot:{width:90,height:90},
   trayPiece:{display:"flex",alignItems:"center",justifyContent:"center",minWidth:90,minHeight:90},
   howto:{fontSize:11,opacity:.5,marginTop:8,textAlign:"center"},
+  shopRow:{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap",marginBottom:8,maxWidth:420,width:"100%"},
+  shopBtn:{border:"none",cursor:"pointer",background:"rgba(255,210,61,0.14)",color:"#ffd23d",fontWeight:700,fontSize:12,padding:"6px 12px",borderRadius:10,fontFamily:"'Baloo 2',sans-serif",boxShadow:"inset 0 0 0 1px rgba(255,210,61,0.3)"},
+  levelWrap:{width:"100%",maxWidth:420,background:"rgba(0,0,0,0.3)",borderRadius:12,overflow:"hidden",boxShadow:"inset 0 0 0 1px rgba(255,255,255,0.08)",marginBottom:12},
+  levelGrid:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,padding:14},
+  levelBtn:{border:"none",cursor:"pointer",background:"rgba(255,255,255,0.08)",color:"#fff",padding:"14px 10px",borderRadius:12,fontFamily:"'Baloo 2',sans-serif",fontSize:13,display:"flex",flexDirection:"column",gap:6,alignItems:"center",boxShadow:"inset 0 0 0 1px rgba(255,255,255,0.08)"},
   debugWrap:{width:"100%",maxWidth:420,marginTop:14,background:"rgba(0,0,0,0.3)",borderRadius:12,overflow:"hidden",boxShadow:"inset 0 0 0 1px rgba(255,255,255,0.08)"},
   debugHead:{padding:"8px 14px",fontWeight:700,fontSize:13,background:"rgba(255,255,255,0.05)"},
   debugBody:{padding:"8px 14px 14px"},
