@@ -277,15 +277,15 @@ function parseCubeBoard(rows){
 // 手工设计的对称布局(Cube Busters 风格): board 决定起手摆放, goals 各元素需收集量, moves 步数
 // 单格收集物与糖条会按起手密度补种维持供应; 齿轮为固定障碍不补种
 const PUZZLES=[
-  {id:'c1',name:'1 · 采集', moves:16, goals:{gem:8},
+  {id:'c1',name:'1 · 采集', moves:22, goals:{gem:8},
    board:["........","........","..G..G..",".G.GG.G.",".G.GG.G.","..G..G..","........","........"]},
-  {id:'c2',name:'2 · 齿轮', moves:20, goals:{gem:8,gear:4},
+  {id:'c2',name:'2 · 齿轮', moves:26, goals:{gem:8,gear:4},
    board:["O......O","........","..G..G..",".G....G.",".G....G.","..G..G..","........","O......O"]},
-  {id:'c3',name:'3 · 糖条', moves:20, goals:{gem:4,candy:10},
+  {id:'c3',name:'3 · 糖条', moves:26, goals:{gem:4,candy:10},
    board:["........",".CCCCCC.","........","...GG...","...GG...","........",".CCCCCC.","........"]},
-  {id:'c4',name:'4 · 混合', moves:24, goals:{star:6,gear:4,candy:4},
+  {id:'c4',name:'4 · 混合', moves:30, goals:{star:6,gear:4,candy:4},
    board:["O......O",".S.CC.S.",".S....S.","........","........",".S....S.",".S.CC.S.","O......O"]},
-  {id:'c5',name:'5 · 硬核', moves:30, goals:{gem:6,star:4,gear:4,candy:6},
+  {id:'c5',name:'5 · 硬核', moves:36, goals:{gem:6,star:4,gear:4,candy:6},
    board:["O.G..G.O",".CC..CC.","G..SS..G","........","........","G..SS..G",".CC..CC.","O.G..G.O"]},
 ];
 // IAP 占位: 锁定的付费关卡包(仅演示变现位置, 不接真实支付)
@@ -371,9 +371,12 @@ export default function BlockBlast(){
   const [pzEl,setPzEl]=useState({});              // 元素分布 "r-c"->type
   const [pzResult,setPzResult]=useState(null);    // null | {win,stars,movesLeft}
   const [pzStars,setPzStars]=useState(loadStars);
+  const [pzStuck,setPzStuck]=useState(false);     // 无处可放 -> 提示用道具
   const modeRef=useRef("match"), puzzleRef=useRef(null);
   const pzElRef=useRef({}), pzMovesRef=useRef(0), pzCollectedRef=useRef({});
   const pzActiveRef=useRef(0), pzBarTargetRef=useRef(0); // 维持的单格/糖条数(= 起手布局密度)
+  const powersRef=useRef({undo:0,bomb:0,rowcol:0});
+  useEffect(()=>{powersRef.current=powers;},[powers]);
   useEffect(()=>{modeRef.current=mode;},[mode]);
   useEffect(()=>{puzzleRef.current=puzzle;},[puzzle]);
 
@@ -666,7 +669,7 @@ export default function BlockBlast(){
       pzElRef.current={...snap.pzEl}; setPzEl({...snap.pzEl});
       pzMovesRef.current=snap.pzMoves; setPzMoves(snap.pzMoves);
       pzCollectedRef.current={...snap.pzCollected}; setPzCollected({...snap.pzCollected});
-      setPzResult(null); setGameOver(false);
+      setPzResult(null); setGameOver(false); setPzStuck(false);
       setPowers(p=>({...p,undo:p.undo-1})); setCanUndo(false); undoSnapRef.current=null; setTool(null);
       placeFloat("↩ 撤销","#5e8bff"); return;
     }
@@ -731,9 +734,14 @@ export default function BlockBlast(){
   const checkPuzzleEnd=(g,trayArr)=>{
     const def=puzzleRef.current; if(!def||pzResult)return;
     if(goalsMet(def,pzCollectedRef.current)){winPuzzle();return;}
+    if(pzMovesRef.current<=0){losePuzzle();return;}
     const rem=trayArr.filter(Boolean);
     const stuck=rem.length>0 && !rem.some(s=>anyPlacement(g,s));
-    if(pzMovesRef.current<=0||stuck)losePuzzle();
+    if(stuck){
+      const p=powersRef.current;
+      if(p&&(p.bomb>0||p.rowcol>0)){ setPzStuck(true); placeFloat("无处可放 · 用道具炸开空间!","#ffd23d"); } // 还有道具就不判负
+      else losePuzzle(); // 既走不动又没道具 -> 失败
+    } else setPzStuck(false);
   };
   // 收集 removedKeys 上的元素并补种(道具消除走这里, 不消耗步数)
   const pzAfterRemoval=(removedKeys,g)=>{
@@ -750,7 +758,7 @@ export default function BlockBlast(){
     const shape=curTray[idx];
     if(!shape||!canPlace(curGrid,shape.cells,r0,c0))return false;
     undoSnapRef.current={mode:"puzzle",grid:curGrid.map(r=>r.slice()),tray:curTray.map(s=>s?{...s}:null),score:scoreRef.current,combo:comboRef.current,streakLeft:streakRef.current,pzEl:{...pzElRef.current},pzMoves:pzMovesRef.current,pzCollected:{...pzCollectedRef.current}};
-    setCanUndo(true);
+    setCanUndo(true); setPzStuck(false);
     const g=curGrid.map(r=>r.slice());
     shape.cells.forEach(([dr,dc])=>{g[r0+dr][c0+dc]=shape.color;});
     pzMovesRef.current-=1; setPzMoves(pzMovesRef.current);   // 落子 = 消耗 1 步
@@ -805,8 +813,8 @@ export default function BlockBlast(){
     pzCollectedRef.current={}; setPzCollected({});
     recentShapesRef.current=[];
     setGrid(pg); setTray(dealTray(pg,"DG1",recentShapesRef));
-    setScore(0); setCombo(0); setStreakLeft(STREAK_WINDOW); setGameOver(false); setPzResult(null);
-    setPowers({undo:3,bomb:1,rowcol:2}); setTool(null); setDrag(null); setHoverOrigin(null);
+    setScore(0); setCombo(0); setStreakLeft(STREAK_WINDOW); setGameOver(false); setPzResult(null); setPzStuck(false);
+    setPowers({undo:3,bomb:2,rowcol:3}); setTool(null); setDrag(null); setHoverOrigin(null); // 多给道具, 降难+供脱困
     setCanUndo(false); undoSnapRef.current=null; setClearing(new Set());
   };
   const enterPuzzleMode=()=>{setMode("puzzle");modeRef.current="puzzle";setPuzzle(null);puzzleRef.current=null;setPzResult(null);setGameOver(false);setTool(null);setDrag(null);setCanUndo(false);undoSnapRef.current=null;};
@@ -905,6 +913,7 @@ export default function BlockBlast(){
           <button style={S.shopBtn} onClick={()=>iapDemo("道具补给")}>🎁 道具(IAP)</button>
           <span style={{fontSize:10,opacity:.5,alignSelf:"center"}}>消除经过元素的行/列即收集</span>
         </div>
+        {pzStuck&&!pzResult&&<div style={S.stuckHint}>⚠️ 没地方放了!用下方 💣炸弹 / ✚直线 道具炸开空间</div>}
       </>)}
 
       {(mode==="match"||puzzle)&&(<>
@@ -1112,6 +1121,7 @@ const S={
   howto:{fontSize:11,opacity:.5,marginTop:8,textAlign:"center"},
   queueRow:{display:"flex",gap:6,alignItems:"center",justifyContent:"flex-start",flexWrap:"wrap",marginBottom:8,maxWidth:420,width:"100%",padding:"6px 8px",background:"rgba(0,0,0,0.25)",borderRadius:10},
   goalRow:{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap",marginBottom:8,maxWidth:420,width:"100%"},
+  stuckHint:{maxWidth:420,width:"100%",textAlign:"center",fontSize:12,fontWeight:700,color:"#15102e",background:"linear-gradient(135deg,#ffd23d,#ffa63d)",borderRadius:10,padding:"6px 10px",marginBottom:8},
   goalChip:{display:"flex",alignItems:"center",gap:6,padding:"5px 12px",borderRadius:12,background:"rgba(0,0,0,0.3)"},
   shopRow:{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap",marginBottom:8,maxWidth:420,width:"100%"},
   shopBtn:{border:"none",cursor:"pointer",background:"rgba(255,210,61,0.14)",color:"#ffd23d",fontWeight:700,fontSize:12,padding:"6px 12px",borderRadius:10,fontFamily:"'Baloo 2',sans-serif",boxShadow:"inset 0 0 0 1px rgba(255,210,61,0.3)"},
