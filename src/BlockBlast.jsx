@@ -253,18 +253,19 @@ function parsePuzzleBoard(rows){
 }
 // 内置关卡(均已手工验证可解; goal:'targets'=消除全部目标格, 'clearAll'=清空棋盘)
 // pieces 为固定方块队列(SHAPE_DEFS 索引), 每发 3 块、用完一波再发下一波
-// 规划型残局: 公开整条队列, 队列长度=最少步数(par, 求解器算出), 零冗余 -> 每块都必须放对, 一步错即走死。
+// 目标收集型残局: 几种元素散布盘面, 消除经过元素的行/列即收集; 限步数内集齐各元素配额
+const PZ_ELEMENTS={
+  gem :{icon:"💎",color:"#1f6f8c"},
+  star:{icon:"⭐",color:"#8a6a16"},
+  leaf:{icon:"🍀",color:"#236b3a"},
+};
+// 每关: moves 步数预算, fill 起手随机填充率, active 盘面保持的活跃元素数, goals 各元素需收集量
 const PUZZLES=[
-  {id:'p1',name:'1 · 热身', goal:'targets', par:4, pieces:[13,8,3,3],
-   board:["X.X.....","X...X...","..XX..XX",".XXXXX..",".....TXX","..TXX.XX",".XXXX.X.","XXX..XXX"]},
-  {id:'p2',name:'2 · 进阶', goal:'targets', par:4, pieces:[11,2,21,11],
-   board:[".XX..XX.","X..XXX.X","X..X....","XX.X...X",".T.XX.XX",".XX....X",".X....X.",".....TX."]},
-  {id:'p3',name:'3 · 谋局', goal:'targets', par:5, pieces:[10,2,4,1,4],
-   board:[".X....X.","..XX.XXX",".XXXT..X","....X.X.",".XX...XX","X.....XX","X.XXX...","T.XX.X.X"]},
-  {id:'p4',name:'4 · 紧逼', goal:'targets', par:5, pieces:[7,9,7,3,2],
-   board:["......X.",".XX.XX..","X...X...","XXX.TXX.","X.XX.XX.","..X..XX.","....T...","XX.....X"]},
-  {id:'p5',name:'5 · 烧脑', goal:'targets', par:7, pieces:[4,10,23,13,5,9,7],
-   board:[".....X.X","T.X.X.XX","X.XX.X..","...X.X..","........","X.......","X...T...","..XX.XX."]},
+  {id:'c1',name:'1 · 采集入门', moves:18, fill:0.28, active:6, goals:{gem:5}},
+  {id:'c2',name:'2 · 双色',     moves:22, fill:0.30, active:7, goals:{gem:5,star:4}},
+  {id:'c3',name:'3 · 三色',     moves:28, fill:0.32, active:8, goals:{gem:5,star:5,leaf:4}},
+  {id:'c4',name:'4 · 紧凑',     moves:26, fill:0.32, active:8, goals:{star:6,leaf:5}},
+  {id:'c5',name:'5 · 硬核',     moves:30, fill:0.34, active:9, goals:{gem:6,star:6,leaf:5}},
 ];
 // IAP 占位: 锁定的付费关卡包(仅演示变现位置, 不接真实支付)
 const PZ_LOCKED_PACKS=[{id:'neon',name:'🌆 霓虹包 · 60关'},{id:'ice',name:'🧊 寒冰包 · 60关'}];
@@ -344,15 +345,13 @@ export default function BlockBlast(){
   // ===== 残局(关卡)模式状态 =====
   const [mode,setMode]=useState("match");        // 'match' 对局 | 'puzzle' 残局
   const [puzzle,setPuzzle]=useState(null);        // 当前残局定义(null=选关界面)
-  const [pzTargets,setPzTargets]=useState(()=>new Set());
-  const [pzPiecesLeft,setPzPiecesLeft]=useState(0);
-  const [pzResult,setPzResult]=useState(null);    // null | {win,stars,used}
+  const [pzMoves,setPzMoves]=useState(0);         // 剩余步数
+  const [pzCollected,setPzCollected]=useState({}); // 已收集 {type:n}
+  const [pzEl,setPzEl]=useState({});              // 元素分布 "r-c"->type
+  const [pzResult,setPzResult]=useState(null);    // null | {win,stars,movesLeft}
   const [pzStars,setPzStars]=useState(loadStars);
-  const [pzQueueView,setPzQueueView]=useState([]); // 公开队列(剩余未发的方块)
-  const [pzHint,setPzHint]=useState(()=>new Set()); // 提示高亮的格子
   const modeRef=useRef("match"), puzzleRef=useRef(null);
-  const pzTargetsRef=useRef(new Set()), pzQueueRef=useRef([]), pzUsedRef=useRef(0);
-  const pzHintUsedRef=useRef(false), pzUndoUsedRef=useRef(false); // 评星: 是否用过提示/撤销
+  const pzElRef=useRef({}), pzMovesRef=useRef(0), pzCollectedRef=useRef({});
   useEffect(()=>{modeRef.current=mode;},[mode]);
   useEffect(()=>{puzzleRef.current=puzzle;},[puzzle]);
 
@@ -638,15 +637,13 @@ export default function BlockBlast(){
     if(powers.undo<=0) return;
     const snap=undoSnapRef.current;
     if(!snap){ placeFloat("无可撤销步骤","#8892a6"); return; }
-    if(snap.mode==="puzzle"){ // 残局撤销: 回滚棋盘/托盘/目标/队列
+    if(snap.mode==="puzzle"){ // 残局撤销: 回滚棋盘/托盘/元素/步数/收集
       setGrid(snap.grid.map(row=>row.slice()));
       setTray(snap.tray.map(s=>s?{...s}:null));
       setScore(snap.score); setCombo(snap.combo); setStreakLeft(snap.streakLeft);
-      pzTargetsRef.current=new Set(snap.pzTargets); setPzTargets(new Set(snap.pzTargets));
-      pzQueueRef.current=[...snap.pzQueue]; pzUsedRef.current=snap.pzUsed;
-      pzUndoUsedRef.current=true; // 撤销过 -> 最高 2★
-      setPzQueueView([...snap.pzQueue]); setPzHint(new Set());
-      setPzPiecesLeft(snap.pzQueue.length+snap.tray.filter(Boolean).length);
+      pzElRef.current={...snap.pzEl}; setPzEl({...snap.pzEl});
+      pzMovesRef.current=snap.pzMoves; setPzMoves(snap.pzMoves);
+      pzCollectedRef.current={...snap.pzCollected}; setPzCollected({...snap.pzCollected});
       setPzResult(null); setGameOver(false);
       setPowers(p=>({...p,undo:p.undo-1})); setCanUndo(false); undoSnapRef.current=null; setTool(null);
       placeFloat("↩ 撤销","#5e8bff"); return;
@@ -666,54 +663,53 @@ export default function BlockBlast(){
   };
   const revive=(g)=>{const rem=trayRef.current.filter(Boolean);if(gameOver&&rem.some(s=>anyPlacement(g,s)))setGameOver(false);};
 
-  // ===== 残局模式逻辑 =====
+  // ===== 残局模式逻辑 (目标收集型: 限步数, 随机发牌, 收集指定元素) =====
   const iapDemo=(label)=>placeFloat(`(演示) ${label} · 未接支付`,"#ffd23d");
+  // 在已填(非元素)格里补种元素, 维持 active 个; 类型在本关目标里轮换, 保证各色都出
+  const reseedElements=(g,el,types,active)=>{
+    let need=active-Object.keys(el).length; if(need<=0)return el;
+    const cand=[]; for(let r=0;r<SIZE;r++)for(let c=0;c<SIZE;c++){const k=`${r}-${c}`;if(g[r][c]&&!el[k])cand.push(k);}
+    for(let i=cand.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[cand[i],cand[j]]=[cand[j],cand[i]];}
+    const next={...el}; let ti=Object.keys(next).length;
+    for(let i=0;i<cand.length&&need>0;i++,need--){next[cand[i]]=types[(ti++)%types.length];}
+    return next;
+  };
+  const goalsMet=(def,got)=>Object.keys(def.goals).every(k=>(got[k]||0)>=def.goals[k]);
   const winPuzzle=()=>{
-    const def=puzzleRef.current; if(!def)return; const used=pzUsedRef.current;
-    // 规划型评星: 不用提示&不撤销=3★, 仅撤销=2★, 用过提示=1★ (奖励纯靠脑子解开)
-    const stars = pzHintUsedRef.current ? 1 : (pzUndoUsedRef.current ? 2 : 3);
-    setPzResult({win:true,stars,used});
+    const def=puzzleRef.current; if(!def)return;
+    const ratio=pzMovesRef.current/def.moves;              // 剩余步数占比决定星级
+    const stars=ratio>=0.4?3:ratio>=0.15?2:1;
+    setPzResult({win:true,stars,movesLeft:pzMovesRef.current});
     setPzStars(prev=>{const m={...prev}; if((m[def.id]||0)<stars){m[def.id]=stars;saveStars(m);} return m;});
     placeFloat("🎉 通关!","#ffd23d",true); triggerShake(true);
   };
-  // 提示: 用求解器从当前局面算出下一步最优落子并高亮(真·提示, 不是摆设)
-  const doHint=()=>{
-    const def=puzzleRef.current; if(!def)return;
-    let occ=0n; gridRef.current.forEach((row,r)=>row.forEach((v,c)=>{if(v)occ|=bitAt(r,c);}));
-    let tgt=0n; pzTargetsRef.current.forEach(k=>{const[r,c]=k.split("-").map(Number);tgt|=bitAt(r,c);});
-    const tray0=trayRef.current.filter(Boolean).map(s=>s.shapeIdx);
-    const res=solveCore(occ,tgt,tray0,pzQueueRef.current,def.goal,200000);
-    if(res.solvable!==true||!res.solution?.length){placeFloat("此局面已无解","#ff5e7e");return;}
-    pzHintUsedRef.current=true;
-    const {si,r,c}=res.solution[0];
-    const keys=new Set(SHAPES[si].map(([dr,dc])=>`${r+dr}-${c+dc}`));
-    setPzHint(keys); placeFloat("💡 提示: 放在高亮处","#3dd6e0");
-    setTimeout(()=>setPzHint(new Set()),2600);
-  };
-  const losePuzzle=()=>setPzResult({win:false,stars:0,used:pzUsedRef.current});
+  const losePuzzle=()=>setPzResult({win:false,stars:0,movesLeft:0});
   const checkPuzzleEnd=(g,trayArr)=>{
     const def=puzzleRef.current; if(!def||pzResult)return;
-    const won = def.goal==="clearAll" ? g.every(row=>row.every(c=>!c)) : pzTargetsRef.current.size===0;
-    if(won){winPuzzle();return;}
+    if(goalsMet(def,pzCollectedRef.current)){winPuzzle();return;}
     const rem=trayArr.filter(Boolean);
-    const outOfPieces = rem.length===0 && pzQueueRef.current.length===0;
-    const stuck = rem.length>0 && !rem.some(s=>anyPlacement(g,s)); // 还有块但都放不下
-    if(outOfPieces||stuck)losePuzzle();
+    const stuck=rem.length>0 && !rem.some(s=>anyPlacement(g,s));
+    if(pzMovesRef.current<=0||stuck)losePuzzle();
   };
+  // 收集 removedKeys 上的元素并补种(道具消除走这里, 不消耗步数)
   const pzAfterRemoval=(removedKeys,g)=>{
-    const tset=new Set(pzTargetsRef.current); removedKeys.forEach(k=>tset.delete(k));
-    pzTargetsRef.current=tset; setPzTargets(new Set(tset));
+    const def=puzzleRef.current; if(!def)return;
+    const el={...pzElRef.current}, got={...pzCollectedRef.current};
+    removedKeys.forEach(k=>{if(el[k]){const t=el[k];got[t]=(got[t]||0)+1;delete el[k];}});
+    const el2=reseedElements(g,el,Object.keys(def.goals),def.active);
+    pzElRef.current=el2; setPzEl(el2);
+    pzCollectedRef.current=got; setPzCollected({...got});
     setTimeout(()=>checkPuzzleEnd(g,trayRef.current),0);
   };
   const placePuzzle=(idx,r0,c0)=>{
-    const curTray=trayRef.current,curGrid=gridRef.current;
+    const curTray=trayRef.current,curGrid=gridRef.current; const def=puzzleRef.current;
     const shape=curTray[idx];
     if(!shape||!canPlace(curGrid,shape.cells,r0,c0))return false;
-    undoSnapRef.current={mode:"puzzle",grid:curGrid.map(r=>r.slice()),tray:curTray.map(s=>s?{...s}:null),score:scoreRef.current,combo:comboRef.current,streakLeft:streakRef.current,pzTargets:new Set(pzTargetsRef.current),pzQueue:[...pzQueueRef.current],pzUsed:pzUsedRef.current};
+    undoSnapRef.current={mode:"puzzle",grid:curGrid.map(r=>r.slice()),tray:curTray.map(s=>s?{...s}:null),score:scoreRef.current,combo:comboRef.current,streakLeft:streakRef.current,pzEl:{...pzElRef.current},pzMoves:pzMovesRef.current,pzCollected:{...pzCollectedRef.current}};
     setCanUndo(true);
     const g=curGrid.map(r=>r.slice());
     shape.cells.forEach(([dr,dc])=>{g[r0+dr][c0+dc]=shape.color;});
-    pzUsedRef.current+=1;
+    pzMovesRef.current-=1; setPzMoves(pzMovesRef.current);   // 落子 = 消耗 1 步
     const placeGain=shape.cells.length*SCORE.perCellPlace;
     const fullRows=[],fullCols=[];
     for(let r=0;r<SIZE;r++)if(g[r].every(c=>c))fullRows.push(r);
@@ -721,9 +717,8 @@ export default function BlockBlast(){
     const lines=fullRows.length+fullCols.length;
     const newTrayArr=curTray.slice(); newTrayArr[idx]=null;
     let finalTray=newTrayArr;
-    if(newTrayArr.every(s=>s===null)){const q=pzQueueRef.current;const next=q.splice(0,3).map(si=>mkShape(si));while(next.length<3)next.push(null);if(next.some(Boolean))finalTray=next;setPzQueueView([...pzQueueRef.current]);}
+    if(newTrayArr.every(s=>s===null))finalTray=dealTray(g,"DG1",recentShapesRef); // 随机自然发牌
     setTray(finalTray);
-    setPzPiecesLeft(pzQueueRef.current.length+finalTray.filter(Boolean).length);
     if(lines===0){
       setScore(s=>s+placeGain); setGrid(g);
       setTimeout(()=>checkPuzzleEnd(g,finalTray),0);
@@ -740,33 +735,36 @@ export default function BlockBlast(){
     fullCols.forEach(c=>{for(let r=0;r<SIZE;r++)keys.add(`${r}-${c}`);});
     setClearing(keys);
     const big=lines>=2; triggerShake(big);
-    const label=`+${gain}`+(lines>=2?`  ${lines}连消!`:"")+(newCombo>1?`  ×${comboMult.toFixed(1)} COMBO`:"");
-    placeFloat(label, lines>=4?"#ffd23d":lines>=2?"#ffa63d":"#5ee07a", big);
     setTimeout(()=>{
       const cleared=g.map(r=>r.slice());
       keys.forEach(k=>{const[r,c]=k.split("-").map(Number);cleared[r][c]=null;});
+      // 收集被消掉的元素
+      const el={...pzElRef.current}, got={...pzCollectedRef.current}, now={};
+      keys.forEach(k=>{if(el[k]){const t=el[k];got[t]=(got[t]||0)+1;now[t]=(now[t]||0)+1;delete el[k];}});
+      const el2=reseedElements(cleared,el,Object.keys(def.goals),def.active);
+      pzElRef.current=el2; setPzEl(el2);
+      pzCollectedRef.current=got; setPzCollected({...got});
       setClearing(new Set()); setScore(s=>s+gain); setGrid(cleared);
-      const tset=new Set(pzTargetsRef.current); keys.forEach(k=>tset.delete(k));
-      pzTargetsRef.current=tset; setPzTargets(new Set(tset));
+      const parts=Object.keys(now).map(t=>`${PZ_ELEMENTS[t].icon}×${now[t]}`);
+      placeFloat(parts.length?parts.join(" "):`+${gain}`, lines>=2?"#ffd23d":"#5ee07a", big);
       checkPuzzleEnd(cleared,finalTray);
     }, big?320:280);
     return true;
   };
   const loadPuzzle=(def)=>{
-    const {grid:pg,targets}=parsePuzzleBoard(def.board);
-    let tset=targets;
-    if(def.goal==="clearAll"){tset=new Set();pg.forEach((row,r)=>row.forEach((v,c)=>{if(v)tset.add(`${r}-${c}`);}));}
+    const pg=emptyGrid();
+    for(let r=0;r<SIZE;r++)for(let c=0;c<SIZE;c++){if(Math.random()<def.fill)pg[r][c]=COLORS[Math.floor(Math.random()*COLORS.length)];}
+    for(let r=0;r<SIZE;r++)if(pg[r].every(x=>x))pg[r][Math.floor(Math.random()*SIZE)]=null;       // 避免起手满行
+    for(let c=0;c<SIZE;c++){let f=true;for(let r=0;r<SIZE;r++)if(!pg[r][c])f=false;if(f)pg[Math.floor(Math.random()*SIZE)][c]=null;}
+    const el=reseedElements(pg,{},Object.keys(def.goals),def.active);
     setPuzzle(def); puzzleRef.current=def;
-    pzTargetsRef.current=new Set(tset); setPzTargets(new Set(tset));
-    const queue=[...def.pieces];
-    const first=queue.splice(0,3).map(si=>mkShape(si)); while(first.length<3)first.push(null);
-    pzQueueRef.current=queue; pzUsedRef.current=0;
-    pzHintUsedRef.current=false; pzUndoUsedRef.current=false;
-    setPzQueueView([...queue]); setPzHint(new Set());
-    setPzPiecesLeft(queue.length+first.filter(Boolean).length);
-    setGrid(pg); setTray(first);
+    pzElRef.current=el; setPzEl(el);
+    pzMovesRef.current=def.moves; setPzMoves(def.moves);
+    pzCollectedRef.current={}; setPzCollected({});
+    recentShapesRef.current=[];
+    setGrid(pg); setTray(dealTray(pg,"DG1",recentShapesRef));
     setScore(0); setCombo(0); setStreakLeft(STREAK_WINDOW); setGameOver(false); setPzResult(null);
-    setPowers({undo:5,bomb:1,rowcol:1}); setTool(null); setDrag(null); setHoverOrigin(null);
+    setPowers({undo:3,bomb:1,rowcol:1}); setTool(null); setDrag(null); setHoverOrigin(null);
     setCanUndo(false); undoSnapRef.current=null; setClearing(new Set());
   };
   const enterPuzzleMode=()=>{setMode("puzzle");modeRef.current="puzzle";setPuzzle(null);puzzleRef.current=null;setPzResult(null);setGameOver(false);setTool(null);setDrag(null);setCanUndo(false);undoSnapRef.current=null;};
@@ -831,6 +829,8 @@ export default function BlockBlast(){
             {PUZZLES.map(p=>{const s=pzStars[p.id]||0;return (
               <button key={p.id} style={S.levelBtn} onClick={()=>loadPuzzle(p)}>
                 <div style={{fontWeight:800}}>{p.name}</div>
+                <div style={{fontSize:12,opacity:.9}}>{Object.keys(p.goals).map(t=>`${PZ_ELEMENTS[t].icon}${p.goals[t]}`).join(" ")}</div>
+                <div style={{fontSize:10,opacity:.6}}>{p.moves} 步</div>
                 <div style={{color:"#ffd23d",fontSize:14,letterSpacing:2}}>{starStr(s)}</div>
               </button>);})}
             {PZ_LOCKED_PACKS.map(p=>(
@@ -839,7 +839,7 @@ export default function BlockBlast(){
                 <div style={{fontSize:11,opacity:.85}}>🔒 点击解锁(IAP占位)</div>
               </button>))}
           </div>
-          <div style={S.howto}>规划型残局:队列全公开,方块刚好够用,一步放错就走死 · 不用提示&不撤销=3★</div>
+          <div style={S.howto}>收集型残局:消除经过元素的行/列收集对应元素,限步数内集齐配额过关 · 剩余步数越多星级越高</div>
         </div>
       )}
 
@@ -848,26 +848,27 @@ export default function BlockBlast(){
         <div style={S.statusBar}>
           <button className="vt" onClick={backToLevels}>← 选关</button>
           <span style={{...S.tag,background:"#3a2f66"}}>{puzzle.name}</span>
-          <span style={{...S.tag,background:"#8b3d6b"}}>{puzzle.goal==="clearAll"?`剩余 ${pzTargets.size}`:`目标 ${pzTargets.size}`}</span>
-          <span style={{...S.tag,background:"#2f6b8b"}}>最优 {puzzle.par} 步</span>
-          <span style={{...S.tag,background:"#3d7a4a"}}>余块 {pzPiecesLeft}</span>
+          <span style={{...S.tag,background:pzMoves<=3?"#9b2f3d":"#2f6b8b"}}>步数 {pzMoves}</span>
         </div>
-        {/* 公开队列: 一眼看到后续所有方块, 供通盘规划 */}
-        <div style={S.queueRow}>
-          <span style={{fontSize:10,opacity:.6,marginRight:2}}>队列 →</span>
-          {pzQueueView.length?pzQueueView.map((si,i)=><MiniShape key={i} si={si}/>):<span style={{fontSize:10,opacity:.4}}>(本波是最后)</span>}
+        {/* 收集目标 */}
+        <div style={S.goalRow}>
+          {Object.keys(puzzle.goals).map(t=>{const need=puzzle.goals[t];const got=Math.min(pzCollected[t]||0,need);const done=got>=need;return (
+            <div key={t} style={{...S.goalChip,opacity:done?0.5:1,boxShadow:done?"inset 0 0 0 2px #5ee07a":"inset 0 0 0 1px rgba(255,255,255,0.1)"}}>
+              <span style={{fontSize:20}}>{PZ_ELEMENTS[t].icon}</span>
+              <span style={{fontWeight:800,fontFamily:"monospace",color:done?"#5ee07a":"#fff"}}>{got}/{need}{done?" ✓":""}</span>
+            </div>);})}
         </div>
         <div style={S.shopRow}>
-          <button style={S.shopBtn} onClick={doHint}>💡 提示</button>
+          <button style={S.shopBtn} onClick={()=>iapDemo("+5 步")}>➕5 步(IAP)</button>
           <button style={S.shopBtn} onClick={()=>iapDemo("道具补给")}>🎁 道具(IAP)</button>
-          <span style={{fontSize:10,opacity:.5,alignSelf:"center"}}>提示=求解器算出的下一步</span>
+          <span style={{fontSize:10,opacity:.5,alignSelf:"center"}}>消除经过元素的行/列即收集</span>
         </div>
       </>)}
 
       {(mode==="match"||puzzle)&&(<>
       <div style={S.boardZone}>
         <div ref={boardRef} className={shake?`board shake${shake==="big"?" big":""}`:"board"} style={{...S.board,gridTemplateColumns:`repeat(${SIZE},${cell}px)`,gridTemplateRows:`repeat(${SIZE},${cell}px)`,"--cell":`${cell}px`,cursor:tool?"crosshair":"default",touchAction:"none"}}>
-          {grid.map((row,r)=>row.map((cell,c)=>{const key=`${r}-${c}`;const isC=clearing.has(key);const inP=previewKeys?.keys.has(key);let cls="cell";if(cell)cls+=" filled";if(isC)cls+=" clearing";if(inP&&previewKeys.ok)cls+=" preview";if(cell&&pzTargets.has(key))cls+=" target";if(pzHint.has(key))cls+=" hint";return <div key={key} className={cls} style={{background:cell||undefined,"--cc":inP?previewKeys.color:cell}} onClick={()=>tool&&useToolOnCell(r,c)} />;}))}
+          {grid.map((row,r)=>row.map((cell,c)=>{const key=`${r}-${c}`;const isC=clearing.has(key);const inP=previewKeys?.keys.has(key);const elT=mode==="puzzle"?pzEl[key]:null;let cls="cell";if(cell)cls+=" filled";if(isC)cls+=" clearing";if(inP&&previewKeys.ok)cls+=" preview";if(cell&&elT)cls+=" el";return <div key={key} className={cls} style={{background:(cell&&elT)?PZ_ELEMENTS[elT].color:(cell||undefined),"--cc":inP?previewKeys.color:cell}} onClick={()=>tool&&useToolOnCell(r,c)}>{cell&&elT?<span className="elIcon">{PZ_ELEMENTS[elT].icon}</span>:null}</div>;}))}
           {floats.map(f=><div key={f.id} className={f.big?"floatScore big":"floatScore"} style={{color:f.color}}>{f.text}</div>)}
         </div>
       </div>
@@ -882,7 +883,7 @@ export default function BlockBlast(){
       <div style={S.tray}>
         {tray.map((shape,i)=><TrayPiece key={i} shape={shape} dragging={drag?.idx===i} onPointerDown={e=>onPiecePointerDown(e,i)} />)}
       </div>
-      <div style={S.howto}>{mode==="puzzle"?"拖动方块 · 消除高亮目标格(★)即过关 · 道具可助攻":`拖动方块到棋盘放置 · 填满整行/列消除 · ${STREAK_WINDOW}步内不消除则断连击`}</div>
+      <div style={S.howto}>{mode==="puzzle"?"拖动方块 · 消除经过元素(💎⭐🍀)的整行/列即收集 · 集齐配额过关":`拖动方块到棋盘放置 · 填满整行/列消除 · ${STREAK_WINDOW}步内不消除则断连击`}</div>
       </>)}
 
       {/* 难度调控视图: 调试面板 + 曲线 */}
@@ -944,12 +945,14 @@ export default function BlockBlast(){
       {/* 残局结算 */}
       {pzResult&&(
         <div style={S.overlay}><div style={S.modal}>
-          <div style={{...S.goTitle,color:pzResult.win?"#ffd23d":"#ff5e7e"}}>{pzResult.win?"🎉 通关!":"走死了"}</div>
+          <div style={{...S.goTitle,color:pzResult.win?"#ffd23d":"#ff5e7e"}}>{pzResult.win?"🎉 通关!":"挑战失败"}</div>
           {pzResult.win&&<div style={{fontSize:32,letterSpacing:6,color:"#ffd23d",margin:"6px 0"}}>{starStr(pzResult.stars)}</div>}
-          <div style={S.goLabel}>{puzzle?.name} · {pzResult.win?(pzResult.stars===3?"完美! 没用提示也没撤销":pzResult.stars===2?"用了撤销 (2★)":"用了提示 (1★)"):"已无处可放, 再想想落子顺序"}</div>
+          <div style={S.goLabel}>{puzzle?.name} · {pzResult.win?`集齐目标! 剩余 ${pzResult.movesLeft} 步`:"步数用尽 / 无处可放, 目标未集齐"}</div>
           <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
             <button style={S.playBtn} onClick={()=>loadPuzzle(puzzleRef.current)}>重玩</button>
-            {pzResult.win&&<button style={S.playBtn} onClick={nextPuzzle}>下一关 ▶</button>}
+            {pzResult.win
+              ? <button style={S.playBtn} onClick={nextPuzzle}>下一关 ▶</button>
+              : <button style={S.playBtn} onClick={()=>iapDemo("+5 步 续局")}>➕5步</button>}
             <button style={{...S.dbgBtn,padding:"12px 18px"}} onClick={backToLevels}>选关</button>
           </div>
         </div></div>
@@ -1015,6 +1018,8 @@ const css=`
 @keyframes tstar{0%,100%{opacity:.5;transform:scale(1);}50%{opacity:1;transform:scale(1.12);}}
 .cell.hint{box-shadow:inset 0 0 0 3px #5ee07a,0 0 12px #5ee07a;animation:hintpulse .6s ease-in-out infinite;}
 @keyframes hintpulse{0%,100%{opacity:.65;}50%{opacity:1;}}
+.cell.el{box-shadow:inset 0 0 0 2px rgba(255,255,255,0.75),inset 0 -4px 0 rgba(0,0,0,0.3);}
+.elIcon{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:calc(var(--cell,38px) * 0.6);line-height:1;pointer-events:none;}
 .cell.preview{background:var(--cc)!important;opacity:.55;}
 .cell.clearing{animation:pop .3s ease forwards;}
 @keyframes pop{0%{transform:scale(1);}40%{transform:scale(1.3);filter:brightness(2);}100%{transform:scale(0);opacity:0;}}
@@ -1063,6 +1068,8 @@ const S={
   trayPiece:{display:"flex",alignItems:"center",justifyContent:"center",minWidth:90,minHeight:90},
   howto:{fontSize:11,opacity:.5,marginTop:8,textAlign:"center"},
   queueRow:{display:"flex",gap:6,alignItems:"center",justifyContent:"flex-start",flexWrap:"wrap",marginBottom:8,maxWidth:420,width:"100%",padding:"6px 8px",background:"rgba(0,0,0,0.25)",borderRadius:10},
+  goalRow:{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap",marginBottom:8,maxWidth:420,width:"100%"},
+  goalChip:{display:"flex",alignItems:"center",gap:6,padding:"5px 12px",borderRadius:12,background:"rgba(0,0,0,0.3)"},
   shopRow:{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap",marginBottom:8,maxWidth:420,width:"100%"},
   shopBtn:{border:"none",cursor:"pointer",background:"rgba(255,210,61,0.14)",color:"#ffd23d",fontWeight:700,fontSize:12,padding:"6px 12px",borderRadius:10,fontFamily:"'Baloo 2',sans-serif",boxShadow:"inset 0 0 0 1px rgba(255,210,61,0.3)"},
   levelWrap:{width:"100%",maxWidth:420,background:"rgba(0,0,0,0.3)",borderRadius:12,overflow:"hidden",boxShadow:"inset 0 0 0 1px rgba(255,255,255,0.08)",marginBottom:12},
