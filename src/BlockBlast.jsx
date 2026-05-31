@@ -263,14 +263,30 @@ const PZ_ELEMENTS={
   candy:{icon:"🍬",color:"#c83a5a",bar:true},
 };
 const PZ_SINGLE=['gem','star','leaf'];
-// 每关: moves 步数, fill 起手填充率, active 维持的单格收集物数, gears 起手齿轮数(不补种),
-//       bars 维持的糖条数(每条3格), goals 各元素需收集量
+// 关卡棋盘字符: '.'空 '#'普通块 G宝石 S星 L叶 O齿轮(障碍) C糖条
+const PZ_CHAR={'#':'plain','G':'gem','S':'star','L':'leaf','O':'gear','C':'candy'};
+const PZ_PLAIN="#6c7a9c";
+function parseCubeBoard(rows){
+  const grid=emptyGrid(); const el={};
+  for(let r=0;r<SIZE;r++){const line=rows[r]||"";for(let c=0;c<SIZE;c++){const ch=line[c]||'.';
+    if(ch==='#')grid[r][c]=PZ_PLAIN;
+    else if(PZ_CHAR[ch]&&ch!=='#'){const t=PZ_CHAR[ch];grid[r][c]=PZ_ELEMENTS[t].color;el[`${r}-${c}`]=t;}
+  }}
+  return {grid,el};
+}
+// 手工设计的对称布局(Cube Busters 风格): board 决定起手摆放, goals 各元素需收集量, moves 步数
+// 单格收集物与糖条会按起手密度补种维持供应; 齿轮为固定障碍不补种
 const PUZZLES=[
-  {id:'c1',name:'1 · 采集', moves:18, fill:0.30, active:6, gears:0, bars:0, goals:{gem:6}},
-  {id:'c2',name:'2 · 齿轮', moves:24, fill:0.32, active:5, gears:7, bars:0, goals:{gem:6,gear:6}},
-  {id:'c3',name:'3 · 糖条', moves:24, fill:0.34, active:5, gears:0, bars:3, goals:{gem:6,candy:9}},
-  {id:'c4',name:'4 · 混合', moves:28, fill:0.34, active:5, gears:5, bars:2, goals:{star:6,gear:4,candy:6}},
-  {id:'c5',name:'5 · 硬核', moves:32, fill:0.36, active:6, gears:7, bars:3, goals:{gem:6,star:6,gear:6,candy:9}},
+  {id:'c1',name:'1 · 采集', moves:16, goals:{gem:8},
+   board:["........","........","..G..G..",".G.GG.G.",".G.GG.G.","..G..G..","........","........"]},
+  {id:'c2',name:'2 · 齿轮', moves:20, goals:{gem:8,gear:4},
+   board:["O......O","........","..G..G..",".G....G.",".G....G.","..G..G..","........","O......O"]},
+  {id:'c3',name:'3 · 糖条', moves:20, goals:{gem:4,candy:10},
+   board:["........",".CCCCCC.","........","...GG...","...GG...","........",".CCCCCC.","........"]},
+  {id:'c4',name:'4 · 混合', moves:24, goals:{star:6,gear:4,candy:4},
+   board:["O......O",".S.CC.S.",".S....S.","........","........",".S....S.",".S.CC.S.","O......O"]},
+  {id:'c5',name:'5 · 硬核', moves:30, goals:{gem:6,star:4,gear:4,candy:6},
+   board:["O.G..G.O",".CC..CC.","G..SS..G","........","........","G..SS..G",".CC..CC.","O.G..G.O"]},
 ];
 // IAP 占位: 锁定的付费关卡包(仅演示变现位置, 不接真实支付)
 const PZ_LOCKED_PACKS=[{id:'neon',name:'🌆 霓虹包 · 60关'},{id:'ice',name:'🧊 寒冰包 · 60关'}];
@@ -357,6 +373,7 @@ export default function BlockBlast(){
   const [pzStars,setPzStars]=useState(loadStars);
   const modeRef=useRef("match"), puzzleRef=useRef(null);
   const pzElRef=useRef({}), pzMovesRef=useRef(0), pzCollectedRef=useRef({});
+  const pzActiveRef=useRef(0), pzBarTargetRef=useRef(0); // 维持的单格/糖条数(= 起手布局密度)
   useEffect(()=>{modeRef.current=mode;},[mode]);
   useEffect(()=>{puzzleRef.current=puzzle;},[puzzle]);
 
@@ -697,8 +714,8 @@ export default function BlockBlast(){
   };
   // 每次消除后维持收集物供应(齿轮不补)
   const maintainElements=(g,el,def)=>{
-    seedSingles(g,el,Object.keys(def.goals).filter(t=>PZ_SINGLE.includes(t)),def.active||0);
-    if(def.goals.candy)seedBars(g,el,(def.bars||0)*3);
+    seedSingles(g,el,Object.keys(def.goals).filter(t=>PZ_SINGLE.includes(t)),pzActiveRef.current||0);
+    if(def.goals.candy)seedBars(g,el,pzBarTargetRef.current||0);
     return el;
   };
   const goalsMet=(def,got)=>Object.keys(def.goals).every(k=>(got[k]||0)>=def.goals[k]);
@@ -779,11 +796,9 @@ export default function BlockBlast(){
     return true;
   };
   const loadPuzzle=(def)=>{
-    const pg=emptyGrid();
-    for(let r=0;r<SIZE;r++)for(let c=0;c<SIZE;c++){if(Math.random()<def.fill)pg[r][c]=COLORS[Math.floor(Math.random()*COLORS.length)];}
-    for(let r=0;r<SIZE;r++)if(pg[r].every(x=>x))pg[r][Math.floor(Math.random()*SIZE)]=null;       // 避免起手满行
-    for(let c=0;c<SIZE;c++){let f=true;for(let r=0;r<SIZE;r++)if(!pg[r][c])f=false;if(f)pg[Math.floor(Math.random()*SIZE)][c]=null;}
-    const el={}; seedGears(pg,el,def.gears||0); maintainElements(pg,el,def);
+    const {grid:pg,el}=parseCubeBoard(def.board);                 // 手工对称布局
+    pzActiveRef.current=Object.values(el).filter(t=>PZ_SINGLE.includes(t)).length; // 维持起手收集物密度
+    pzBarTargetRef.current=Object.values(el).filter(t=>t==='candy').length;
     setPuzzle(def); puzzleRef.current=def;
     pzElRef.current={...el}; setPzEl({...el});
     pzMovesRef.current=def.moves; setPzMoves(def.moves);
@@ -791,7 +806,7 @@ export default function BlockBlast(){
     recentShapesRef.current=[];
     setGrid(pg); setTray(dealTray(pg,"DG1",recentShapesRef));
     setScore(0); setCombo(0); setStreakLeft(STREAK_WINDOW); setGameOver(false); setPzResult(null);
-    setPowers({undo:3,bomb:1,rowcol:1}); setTool(null); setDrag(null); setHoverOrigin(null);
+    setPowers({undo:3,bomb:1,rowcol:2}); setTool(null); setDrag(null); setHoverOrigin(null);
     setCanUndo(false); undoSnapRef.current=null; setClearing(new Set());
   };
   const enterPuzzleMode=()=>{setMode("puzzle");modeRef.current="puzzle";setPuzzle(null);puzzleRef.current=null;setPzResult(null);setGameOver(false);setTool(null);setDrag(null);setCanUndo(false);undoSnapRef.current=null;};
