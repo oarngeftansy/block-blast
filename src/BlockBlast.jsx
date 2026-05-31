@@ -111,6 +111,11 @@ const SHAPE_DEFS = [
   // —— 5格: 偏少 ——
   {w:2,    c:[[0,0],[0,1],[0,2],[0,3],[0,4]]},           // 5横
   {w:2,    c:[[0,0],[1,0],[2,0],[3,0],[4,0]]},           // 5竖
+  // —— 方正大块 (实心矩形, 新手爽感主力; 常规局低权重点缀) ——
+  {w:1.5,  c:[[0,0],[0,1],[0,2],[1,0],[1,1],[1,2]]},               // 2×3
+  {w:1.5,  c:[[0,0],[0,1],[1,0],[1,1],[2,0],[2,1]]},               // 3×2
+  {w:1.0,  c:[[0,0],[0,1],[0,2],[0,3],[1,0],[1,1],[1,2],[1,3]]},   // 2×4
+  {w:1.0,  c:[[0,0],[0,1],[1,0],[1,1],[2,0],[2,1],[3,0],[3,1]]},   // 4×2
   // —— 大块 ——
   {w:2.5,  c:[[0,0],[0,1],[0,2],[1,0],[1,1],[1,2],[2,0],[2,1],[2,2]]}, // 九宫
 ];
@@ -170,6 +175,60 @@ function dealTray(grid,dg,recentRef){
   return out;
 }
 
+// ============== 新手第一关·极致爽感发牌 ==============
+// 完全方正(实心矩形)的形状索引: cells 数量 == 行×列 即为实心矩形(含 2×2/2×3/2×4/3×3 及直条), 面积>=2
+const isSolidRect=(cells)=>{const {rows,cols}=shapeDims(cells);return cells.length===rows*cols;};
+const ROOKIE_SOLID=SHAPES.map((c,i)=>i).filter(i=>isSolidRect(SHAPES[i])&&SHAPES[i].length>=2);
+
+// 在 grid 上放置 cells 于 (r,c) 并清除满行满列, 返回 {g:新棋盘, lines:消除行列数}
+function applyAndClear(grid,cells,r,c){
+  const g=grid.map(row=>row.slice());
+  cells.forEach(([dr,dc])=>{g[r+dr][c+dc]=1;});
+  const fr=[],fc=[];
+  for(let rr=0;rr<SIZE;rr++)if(g[rr].every(Boolean))fr.push(rr);
+  for(let cc=0;cc<SIZE;cc++){let full=true;for(let rr=0;rr<SIZE;rr++)if(!g[rr][cc]){full=false;break;}if(full)fc.push(cc);}
+  fr.forEach(rr=>{for(let cc=0;cc<SIZE;cc++)g[rr][cc]=null;});
+  fc.forEach(cc=>{for(let rr=0;rr<SIZE;rr++)g[rr][cc]=null;});
+  return {g,lines:fr.length+fc.length};
+}
+// 找到 cells 在 grid 上的最佳落点: 优先能消除整行整列, 其次让接近满的行列更满, 再次面积大
+function bestPlacement(grid,cells){
+  let best=null;
+  for(let r=0;r<SIZE;r++)for(let c=0;c<SIZE;c++){
+    if(!canPlace(grid,cells,r,c))continue;
+    const g=grid.map(row=>row.slice());
+    cells.forEach(([dr,dc])=>{g[r+dr][c+dc]=1;});
+    let lines=0,near=0;
+    for(let rr=0;rr<SIZE;rr++){const f=g[rr].filter(Boolean).length;if(f===SIZE)lines++;else if(f>=SIZE-2)near+=f;}
+    for(let cc=0;cc<SIZE;cc++){let f=0;for(let rr=0;rr<SIZE;rr++)if(g[rr][cc])f++;if(f===SIZE)lines++;else if(f>=SIZE-2)near+=f;}
+    const score=lines*1000+near*4+cells.length;
+    if(!best||score>best.score)best={r,c,score,lines};
+  }
+  return best;
+}
+// 发一轮三块"方正大块": 顺序模拟最佳落子, 让三块互相成全(填满 -> 连消), 制造新手极致爽感
+function dealRookieTray(grid){
+  let sim=grid.map(row=>row.slice());
+  const out=[],used=new Set();
+  for(let k=0;k<3;k++){
+    let cands=ROOKIE_SOLID.filter(i=>!used.has(i)).map(i=>{const bp=bestPlacement(sim,SHAPES[i]);return bp?{i,bp}:null;}).filter(Boolean);
+    if(!cands.length)cands=SHAPES.map((_,i)=>i).filter(i=>!used.has(i)).map(i=>{const bp=bestPlacement(sim,SHAPES[i]);return bp?{i,bp}:null;}).filter(Boolean);
+    if(!cands.length){out.push(mkShape(weightedShapeIdx()));continue;}
+    // 先按"消除行列数"再按"面积"排序, 在前若干名里随机, 既爽又不死板
+    cands.sort((a,b)=> b.bp.score-a.bp.score || SHAPES[b.i].length-SHAPES[a.i].length);
+    const topK=cands.slice(0,Math.min(3,cands.length));
+    const chosen=topK[Math.floor(Math.random()*topK.length)];
+    used.add(chosen.i);
+    out.push(mkShape(chosen.i));
+    sim=applyAndClear(sim,SHAPES[chosen.i],chosen.bp.r,chosen.bp.c).g; // 推进模拟棋盘, 让下一块互补
+  }
+  return out;
+}
+// 是否新手第一关(第1轮第1局) -> 启用爽感发牌
+const isRookieLevel=(sched)=>sched.round===1&&sched.gameNo===1;
+// 按当前调度状态发牌: 新手第一关走爽感发牌, 否则走常规 DG 发牌
+const dealForState=(grid,sched,dg,recentRef)=>isRookieLevel(sched)?dealRookieTray(grid):dealTray(grid,dg,recentRef);
+
 const resolveSlot=(loopIndex,recordPhase)=>recordPhase>0?`破纪录${recordPhase}`:DIFF_CYCLE[loopIndex];
 const tierName=(ass)=>ass<TIER_THRESHOLDS.low?"低阶":ass>TIER_THRESHOLDS.high?"高阶":"中阶";
 function resolveTemplate(tier,slot){
@@ -182,7 +241,7 @@ function resolveTemplate(tier,slot){
 // =====================================================================
 export default function BlockBlast(){
   const [grid,setGrid]=useState(emptyGrid);
-  const [tray,setTray]=useState(()=>dealTray(emptyGrid(),"DG2"));
+  const [tray,setTray]=useState(()=>dealRookieTray(emptyGrid())); // 进入游戏即新手第一关 -> 爽感发牌
   const [score,setScore]=useState(0);
   const [best,setBest]=useState(0);
   const [combo,setCombo]=useState(0);
@@ -347,7 +406,7 @@ export default function BlockBlast(){
     const dgForDeal=applyJump(baseDGForDeal); // 跳转后的实际生效DG
     const newTrayArr=curTray.slice(); newTrayArr[idx]=null;
     let finalTray=newTrayArr;
-    if(newTrayArr.every(s=>s===null))finalTray=dealTray(g,dgForDeal,recentShapesRef);
+    if(newTrayArr.every(s=>s===null))finalTray=dealForState(g,schedRef.current,dgForDeal,recentShapesRef);
     setTray(finalTray);
 
     if(lines===0){
@@ -437,7 +496,7 @@ export default function BlockBlast(){
     setGrid(fresh);setDgState({tpl,seq,dgIdx:0,roundInDg:0});recentShapesRef.current=[];
     microRef.current={breakStreak:0,jump:null,capped:false,lastDgIdx:0};
     setMicroInfo({code:null,remain:0,delta:0,label:"未触发"});
-    setTray(dealTray(fresh,seq[0],recentShapesRef));
+    setTray(dealForState(fresh,sched,seq[0],recentShapesRef));
     setScore(0);setCombo(0);setStreakLeft(STREAK_WINDOW);setGameOver(false);setTool(null);
     setPowers({undo:3,bomb:2,rowcol:2});setDrag(null);setHoverOrigin(null);setCanUndo(false);undoSnapRef.current=null;
   },[startKey]); // eslint-disable-line
@@ -527,6 +586,7 @@ export default function BlockBlast(){
         <span style={S.tag}>第{sched.round}轮·第{sched.gameNo}局</span>
         <span style={{...S.tag,background:diffColor(curDifficulty)}}>{curDifficulty}</span>
         <span style={{...S.tag,background:tierColor(sched.tier)}}>{sched.tier}</span>
+        {isRookieLevel(sched)&&<span style={{...S.tag,background:"linear-gradient(135deg,#ff5ed4,#ffa63d)",color:"#1a0f2e"}}>🌟 新手爽局</span>}
         {view==="design"&&<><span style={{...S.tag,background:"#3a2f66"}}>{tpl}</span><span style={{...S.tag,background:"#5e3d8b"}}>{curDG}</span></>}
       </div>
 
