@@ -253,19 +253,24 @@ function parsePuzzleBoard(rows){
 }
 // 内置关卡(均已手工验证可解; goal:'targets'=消除全部目标格, 'clearAll'=清空棋盘)
 // pieces 为固定方块队列(SHAPE_DEFS 索引), 每发 3 块、用完一波再发下一波
-// 目标收集型残局: 几种元素散布盘面, 消除经过元素的行/列即收集; 限步数内集齐各元素配额
+// Cube Busters 式残局: 拖放消行列, 消除经过元素的行/列即收集; 限步数集齐配额
+// 元素: gem/star/leaf=单格收集物; gear=障碍块(消其行列才能清, 可作目标); candy=多格条状收集物
 const PZ_ELEMENTS={
   gem :{icon:"💎",color:"#1f6f8c"},
   star:{icon:"⭐",color:"#8a6a16"},
   leaf:{icon:"🍀",color:"#236b3a"},
+  gear:{icon:"⚙️",color:"#5a4636"},
+  candy:{icon:"🍬",color:"#c83a5a",bar:true},
 };
-// 每关: moves 步数预算, fill 起手随机填充率, active 盘面保持的活跃元素数, goals 各元素需收集量
+const PZ_SINGLE=['gem','star','leaf'];
+// 每关: moves 步数, fill 起手填充率, active 维持的单格收集物数, gears 起手齿轮数(不补种),
+//       bars 维持的糖条数(每条3格), goals 各元素需收集量
 const PUZZLES=[
-  {id:'c1',name:'1 · 采集入门', moves:18, fill:0.28, active:6, goals:{gem:5}},
-  {id:'c2',name:'2 · 双色',     moves:22, fill:0.30, active:7, goals:{gem:5,star:4}},
-  {id:'c3',name:'3 · 三色',     moves:28, fill:0.32, active:8, goals:{gem:5,star:5,leaf:4}},
-  {id:'c4',name:'4 · 紧凑',     moves:26, fill:0.32, active:8, goals:{star:6,leaf:5}},
-  {id:'c5',name:'5 · 硬核',     moves:30, fill:0.34, active:9, goals:{gem:6,star:6,leaf:5}},
+  {id:'c1',name:'1 · 采集', moves:18, fill:0.30, active:6, gears:0, bars:0, goals:{gem:6}},
+  {id:'c2',name:'2 · 齿轮', moves:24, fill:0.32, active:5, gears:7, bars:0, goals:{gem:6,gear:6}},
+  {id:'c3',name:'3 · 糖条', moves:24, fill:0.34, active:5, gears:0, bars:3, goals:{gem:6,candy:9}},
+  {id:'c4',name:'4 · 混合', moves:28, fill:0.34, active:5, gears:5, bars:2, goals:{star:6,gear:4,candy:6}},
+  {id:'c5',name:'5 · 硬核', moves:32, fill:0.36, active:6, gears:7, bars:3, goals:{gem:6,star:6,gear:6,candy:9}},
 ];
 // IAP 占位: 锁定的付费关卡包(仅演示变现位置, 不接真实支付)
 const PZ_LOCKED_PACKS=[{id:'neon',name:'🌆 霓虹包 · 60关'},{id:'ice',name:'🧊 寒冰包 · 60关'}];
@@ -665,14 +670,36 @@ export default function BlockBlast(){
 
   // ===== 残局模式逻辑 (目标收集型: 限步数, 随机发牌, 收集指定元素) =====
   const iapDemo=(label)=>placeFloat(`(演示) ${label} · 未接支付`,"#ffd23d");
-  // 在已填(非元素)格里补种元素, 维持 active 个; 类型在本关目标里轮换, 保证各色都出
-  const reseedElements=(g,el,types,active)=>{
-    let need=active-Object.keys(el).length; if(need<=0)return el;
-    const cand=[]; for(let r=0;r<SIZE;r++)for(let c=0;c<SIZE;c++){const k=`${r}-${c}`;if(g[r][c]&&!el[k])cand.push(k);}
-    for(let i=cand.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[cand[i],cand[j]]=[cand[j],cand[i]];}
-    const next={...el}; let ti=Object.keys(next).length;
-    for(let i=0;i<cand.length&&need>0;i++,need--){next[cand[i]]=types[(ti++)%types.length];}
-    return next;
+  // ----- 元素撒放/补种 (el 为 "r-c"->type, 就地修改) -----
+  const pzShuffle=a=>{for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
+  const pzFreeCells=(g,el)=>{const out=[];for(let r=0;r<SIZE;r++)for(let c=0;c<SIZE;c++){const k=`${r}-${c}`;if(g[r][c]&&!el[k])out.push(k);}return out;};
+  // 单格收集物: 维持 active 个(只数单格类型)
+  const seedSingles=(g,el,types,active)=>{
+    if(!types.length||!active)return;
+    let cur=Object.values(el).filter(t=>types.includes(t)).length; let need=active-cur; if(need<=0)return;
+    const cand=pzShuffle(pzFreeCells(g,el)); let ti=cur;
+    for(let i=0;i<cand.length&&need>0;i++,need--)el[cand[i]]=types[(ti++)%types.length];
+  };
+  // 糖条: 维持 targetCells 个 candy 格(每条最多3格横向)
+  const seedBars=(g,el,targetCells)=>{
+    if(!targetCells)return;
+    let cur=Object.values(el).filter(t=>t==='candy').length, guard=0;
+    while(cur<targetCells&&guard++<80){
+      const r=Math.floor(Math.random()*SIZE), c=Math.floor(Math.random()*(SIZE-1)); const run=[];
+      for(let k=0;k<3;k++){const cc=c+k;if(cc>=SIZE)break;const key=`${r}-${cc}`;if(g[r][cc]&&!el[key])run.push(key);else break;}
+      if(run.length>=2){run.forEach(key=>{el[key]='candy';});cur+=run.length;}
+    }
+  };
+  // 齿轮障碍: 起手放 n 个, 不补种
+  const seedGears=(g,el,n)=>{
+    if(!n)return; const cand=pzShuffle(pzFreeCells(g,el));
+    for(let i=0;i<n&&i<cand.length;i++)el[cand[i]]='gear';
+  };
+  // 每次消除后维持收集物供应(齿轮不补)
+  const maintainElements=(g,el,def)=>{
+    seedSingles(g,el,Object.keys(def.goals).filter(t=>PZ_SINGLE.includes(t)),def.active||0);
+    if(def.goals.candy)seedBars(g,el,(def.bars||0)*3);
+    return el;
   };
   const goalsMet=(def,got)=>Object.keys(def.goals).every(k=>(got[k]||0)>=def.goals[k]);
   const winPuzzle=()=>{
@@ -696,8 +723,8 @@ export default function BlockBlast(){
     const def=puzzleRef.current; if(!def)return;
     const el={...pzElRef.current}, got={...pzCollectedRef.current};
     removedKeys.forEach(k=>{if(el[k]){const t=el[k];got[t]=(got[t]||0)+1;delete el[k];}});
-    const el2=reseedElements(g,el,Object.keys(def.goals),def.active);
-    pzElRef.current=el2; setPzEl(el2);
+    maintainElements(g,el,def);
+    pzElRef.current={...el}; setPzEl({...el});
     pzCollectedRef.current=got; setPzCollected({...got});
     setTimeout(()=>checkPuzzleEnd(g,trayRef.current),0);
   };
@@ -741,8 +768,8 @@ export default function BlockBlast(){
       // 收集被消掉的元素
       const el={...pzElRef.current}, got={...pzCollectedRef.current}, now={};
       keys.forEach(k=>{if(el[k]){const t=el[k];got[t]=(got[t]||0)+1;now[t]=(now[t]||0)+1;delete el[k];}});
-      const el2=reseedElements(cleared,el,Object.keys(def.goals),def.active);
-      pzElRef.current=el2; setPzEl(el2);
+      maintainElements(cleared,el,def);
+      pzElRef.current={...el}; setPzEl({...el});
       pzCollectedRef.current=got; setPzCollected({...got});
       setClearing(new Set()); setScore(s=>s+gain); setGrid(cleared);
       const parts=Object.keys(now).map(t=>`${PZ_ELEMENTS[t].icon}×${now[t]}`);
@@ -756,9 +783,9 @@ export default function BlockBlast(){
     for(let r=0;r<SIZE;r++)for(let c=0;c<SIZE;c++){if(Math.random()<def.fill)pg[r][c]=COLORS[Math.floor(Math.random()*COLORS.length)];}
     for(let r=0;r<SIZE;r++)if(pg[r].every(x=>x))pg[r][Math.floor(Math.random()*SIZE)]=null;       // 避免起手满行
     for(let c=0;c<SIZE;c++){let f=true;for(let r=0;r<SIZE;r++)if(!pg[r][c])f=false;if(f)pg[Math.floor(Math.random()*SIZE)][c]=null;}
-    const el=reseedElements(pg,{},Object.keys(def.goals),def.active);
+    const el={}; seedGears(pg,el,def.gears||0); maintainElements(pg,el,def);
     setPuzzle(def); puzzleRef.current=def;
-    pzElRef.current=el; setPzEl(el);
+    pzElRef.current={...el}; setPzEl({...el});
     pzMovesRef.current=def.moves; setPzMoves(def.moves);
     pzCollectedRef.current={}; setPzCollected({});
     recentShapesRef.current=[];
@@ -868,7 +895,7 @@ export default function BlockBlast(){
       {(mode==="match"||puzzle)&&(<>
       <div style={S.boardZone}>
         <div ref={boardRef} className={shake?`board shake${shake==="big"?" big":""}`:"board"} style={{...S.board,gridTemplateColumns:`repeat(${SIZE},${cell}px)`,gridTemplateRows:`repeat(${SIZE},${cell}px)`,"--cell":`${cell}px`,cursor:tool?"crosshair":"default",touchAction:"none"}}>
-          {grid.map((row,r)=>row.map((cell,c)=>{const key=`${r}-${c}`;const isC=clearing.has(key);const inP=previewKeys?.keys.has(key);const elT=mode==="puzzle"?pzEl[key]:null;let cls="cell";if(cell)cls+=" filled";if(isC)cls+=" clearing";if(inP&&previewKeys.ok)cls+=" preview";if(cell&&elT)cls+=" el";return <div key={key} className={cls} style={{background:(cell&&elT)?PZ_ELEMENTS[elT].color:(cell||undefined),"--cc":inP?previewKeys.color:cell}} onClick={()=>tool&&useToolOnCell(r,c)}>{cell&&elT?<span className="elIcon">{PZ_ELEMENTS[elT].icon}</span>:null}</div>;}))}
+          {grid.map((row,r)=>row.map((cell,c)=>{const key=`${r}-${c}`;const isC=clearing.has(key);const inP=previewKeys?.keys.has(key);const elT=mode==="puzzle"?pzEl[key]:null;let cls="cell";if(cell)cls+=" filled";if(isC)cls+=" clearing";if(inP&&previewKeys.ok)cls+=" preview";if(cell&&elT)cls+=" el"+(elT==="candy"?" el-candy":"");return <div key={key} className={cls} style={{background:(cell&&elT&&elT!=="candy")?PZ_ELEMENTS[elT].color:(elT==="candy"?undefined:(cell||undefined)),"--cc":inP?previewKeys.color:cell}} onClick={()=>tool&&useToolOnCell(r,c)}>{cell&&elT&&elT!=="candy"?<span className="elIcon">{PZ_ELEMENTS[elT].icon}</span>:null}</div>;}))}
           {floats.map(f=><div key={f.id} className={f.big?"floatScore big":"floatScore"} style={{color:f.color}}>{f.text}</div>)}
         </div>
       </div>
@@ -1020,6 +1047,7 @@ const css=`
 @keyframes hintpulse{0%,100%{opacity:.65;}50%{opacity:1;}}
 .cell.el{box-shadow:inset 0 0 0 2px rgba(255,255,255,0.75),inset 0 -4px 0 rgba(0,0,0,0.3);}
 .elIcon{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:calc(var(--cell,38px) * 0.6);line-height:1;pointer-events:none;}
+.cell.el-candy{background:repeating-linear-gradient(45deg,#ff4d6d 0 6px,#fff 6px 12px)!important;box-shadow:inset 0 0 0 2px rgba(255,255,255,0.8),inset 0 -4px 0 rgba(0,0,0,0.28);}
 .cell.preview{background:var(--cc)!important;opacity:.55;}
 .cell.clearing{animation:pop .3s ease forwards;}
 @keyframes pop{0%{transform:scale(1);}40%{transform:scale(1.3);filter:brightness(2);}100%{transform:scale(0);opacity:0;}}
