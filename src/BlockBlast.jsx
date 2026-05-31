@@ -44,9 +44,11 @@ const TEMPLATES = {
   "L4":  ["DG3","DG4","DG5","DG4","DG6","DG5","DG4","DG6","DG5","DG6","DG5","DG6","DG6","DG5","DG6","DG6"],
   "L5":  ["DG3","DG5","DG6","DG4","DG5","DG6","DG5","DG6","DG6","DG5","DG6","DG6","DG6","DGS","DGS","DGS"],
 };
-// DG -> 发牌目标"可解路径数(合法放置位)"区间, DG越高越逼死(占位值)
-const DG_PLACEMENT = {DG1:[28,64],DG2:[20,40],DG3:[14,28],DG4:[9,18],DG5:[5,12],DG6:[2,7],DGS:[0,4]};
+// DG -> 发牌目标"可解路径数(合法放置位)"区间, DG越高越逼死。已整体收紧 -> 无尽模式更难
+const DG_PLACEMENT = {DG1:[22,52],DG2:[15,32],DG3:[10,21],DG4:[6,14],DG5:[3,9],DG6:[1,5],DGS:[0,3]};
 const DG_ROUNDS = 2;
+// 无尽模式发牌难度整体上移的档数(关卡模式不受影响)。越大越难, 想再难就调到 2。
+const MATCH_DG_BOOST = 1;
 
 // DG难度从低到高的有序列表, 用于升/降级(DGS视作DG6之上一级)
 const DG_ORDER = ["DG1","DG2","DG3","DG4","DG5","DG6","DGS"];
@@ -227,7 +229,7 @@ function dealRookieTray(grid){
 // 是否新手第一关(第1轮第1局) -> 启用爽感发牌
 const isRookieLevel=(sched)=>sched.round===1&&sched.gameNo===1;
 // 按当前调度状态发牌: 新手第一关走爽感发牌, 否则走常规 DG 发牌
-const dealForState=(grid,sched,dg,recentRef)=>isRookieLevel(sched)?dealRookieTray(grid):dealTray(grid,dg,recentRef);
+const dealForState=(grid,sched,dg,recentRef)=>isRookieLevel(sched)?dealRookieTray(grid):dealTray(grid,shiftDG(dg,MATCH_DG_BOOST),recentRef);
 
 const resolveSlot=(loopIndex,recordPhase)=>recordPhase>0?`破纪录${recordPhase}`:DIFF_CYCLE[loopIndex];
 const tierName=(ass)=>ass<TIER_THRESHOLDS.low?"低阶":ass>TIER_THRESHOLDS.high?"高阶":"中阶";
@@ -951,7 +953,8 @@ export default function BlockBlast(){
             <Row k="DG序列" v={dgState.seq.map((d,i)=>i===Math.min(dgState.dgIdx,dgState.seq.length-1)?`[${d}]`:d).join(" ")} />
             <Row k="当前DG(原定)" v={`${curDG} (第${dgState.roundInDg+1}/${DG_ROUNDS}轮)`} hi />
             <Row k="微观跳转后(实际)" v={effectiveDG===curDG?`${effectiveDG} · 未跳转`:`${curDG} → ${effectiveDG}`} hi />
-            <Row k="发牌可解路径区间" v={DG_PLACEMENT[effectiveDG]?`${DG_PLACEMENT[effectiveDG][0]} ~ ${DG_PLACEMENT[effectiveDG][1]}`:"—"} />
+            <Row k={`实际发牌DG(含+${MATCH_DG_BOOST}难度提升)`} v={`${shiftDG(effectiveDG,MATCH_DG_BOOST)}`} hi />
+            <Row k="发牌可解路径区间" v={(()=>{const d=shiftDG(effectiveDG,MATCH_DG_BOOST);return DG_PLACEMENT[d]?`${DG_PLACEMENT[d][0]} ~ ${DG_PLACEMENT[d][1]}`:"—";})()} />
             <Row k="激活的微观跳转" v={microInfo.code?`${microInfo.label}${microInfo.remain!==Infinity?` · 余${microInfo.remain}组`:" · 至局末"}`:"未触发"} hi />
             {sched.recordPhase>0 ? (
               <>
